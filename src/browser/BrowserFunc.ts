@@ -416,11 +416,11 @@ export default class BrowserFunc {
 
             const data = await this.getDashboardData()
             // Guard against missing profile/attributes and undefined settings
-            let geoLocale = data?.userProfile?.attributes?.country || 'US'
+            let geoLocale = data?.userProfile?.attributes?.country || 'BR'
             const useGeo = !!(this.bot?.config?.searchSettings?.useGeoLocaleQueries)
             geoLocale = (useGeo && typeof geoLocale === 'string' && geoLocale.length === 2)
                 ? geoLocale.toLowerCase()
-                : 'us'
+                : 'br'
 
             const userDataRequest: AxiosRequestConfig = {
                 url: 'https://prod.rewardsplatform.microsoft.com/dapi/me?channel=SAAndroid&options=613',
