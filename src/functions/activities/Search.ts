@@ -67,7 +67,7 @@ export class Search extends Workers {
 
         await this.bot.browser.utils.tryDismissAllMessages(page)
 
-    let stagnation = 0 // consecutive searches without point progress
+        let stagnation = 0 // consecutive searches without point progress
 
         const queries: string[] = []
         // Mobile search doesn't seem to like related queries?
@@ -153,7 +153,7 @@ export class Search extends Workers {
                             return
                         }
                     }
-                fallbackRounds++
+                    fallbackRounds++
                 }
             }
         }
@@ -221,7 +221,10 @@ export class Search extends Workers {
 
                 if (this.bot.config.searchSettings.clickRandomResults) {
                     await this.bot.utils.wait(2000)
-                    await this.clickRandomLink(resultPage)
+                    // 40% chance to click, 60% chance to skip
+                    if (Math.random() < 0.4) {
+                        await this.clickRandomLink(resultPage)
+                    }
                 }
 
                 // Delay between searches
@@ -273,7 +276,7 @@ export class Search extends Workers {
 
             const trendsData = this.extractJsonFromResponse(rawText)
             if (!trendsData) {
-               throw  this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'Failed to parse Google Trends response', 'error')
+                throw this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'Failed to parse Google Trends response', 'error')
             }
 
             const mappedTrendsData = trendsData.map(query => [query[0], query[9]!.slice(1)])
