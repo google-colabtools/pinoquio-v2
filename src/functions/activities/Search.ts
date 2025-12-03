@@ -221,8 +221,8 @@ export class Search extends Workers {
 
                 if (this.bot.config.searchSettings.clickRandomResults) {
                     await this.bot.utils.wait(2000)
-                    // 40% chance to click, 60% chance to skip
-                    if (Math.random() < 0.4) {
+                    // 70% chance to click, 30% chance to skip
+                    if (Math.random() < 0.7) {
                         await this.clickRandomLink(resultPage)
                     }
                 }
