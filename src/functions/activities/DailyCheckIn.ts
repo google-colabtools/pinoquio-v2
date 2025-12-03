@@ -12,7 +12,7 @@ export class DailyCheckIn extends Workers {
 
         try {
             let geoLocale = data.userProfile.attributes.country
-            geoLocale = (this.bot.config.searchSettings.useGeoLocaleQueries && geoLocale.length === 2) ? geoLocale.toLowerCase() : 'br'
+            geoLocale = (this.bot.config.searchSettings.useGeoLocaleQueries && geoLocale.length === 2) ? geoLocale.toLowerCase() : 'us'
 
             const jsonData = {
                 amount: 1,

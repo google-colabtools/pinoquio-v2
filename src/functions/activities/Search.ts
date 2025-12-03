@@ -34,7 +34,7 @@ export class Search extends Workers {
         }
 
         // Generate search queries (primary: Google Trends)
-        const geo = this.bot.config.searchSettings.useGeoLocaleQueries ? data.userProfile.attributes.country : 'BR'
+        const geo = this.bot.config.searchSettings.useGeoLocaleQueries ? data.userProfile.attributes.country : 'US'
         let googleSearchQueries = await this.getGoogleTrends(geo)
 
         // Fallback: if trends failed or insufficient, sample from local queries file
@@ -257,7 +257,7 @@ export class Search extends Workers {
         return await this.bot.browser.func.getSearchPoints()
     }
 
-    private async getGoogleTrends(geoLocale: string = 'BR'): Promise<GoogleSearch[]> {
+    private async getGoogleTrends(geoLocale: string = 'US'): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
         this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', `Generating search queries, can take a while! | GeoLocale: ${geoLocale}`)
 
