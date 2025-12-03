@@ -19,9 +19,32 @@ https://www.browserscan.net/
 
 class Browser {
     private bot: MicrosoftRewardsBot
+    private blockedDomains: string[] = []
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
+    }
+
+    private async loadBlockedDomains(): Promise<string[]> {
+        if (this.blockedDomains.length > 0) {
+            return this.blockedDomains
+        }
+
+        const blocklistUrl = 'https://raw.githubusercontent.com/google-colabtools/pinoquio-v2/refs/heads/main/domain_blocklist.txt'
+        const response = await fetch(blocklistUrl, { signal: AbortSignal.timeout(5000) })
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`)
+        }
+
+        const text = await response.text()
+        this.blockedDomains = text
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#') && !line.startsWith('!'))
+        
+        this.bot.log(this.bot.isMobile, 'BROWSER', `Loaded ${this.blockedDomains.length} blocked domains`)
+        return this.blockedDomains
     }
 
     async createBrowser(proxy: AccountProxy, email: string): Promise<BrowserContext> {
@@ -94,10 +117,18 @@ class Browser {
 
         const context = await newInjectedContext(browser as unknown as import('playwright').Browser, { fingerprint: fingerprint })
 
+        // Carregar lista de domínios bloqueados
+        const blockedDomains = await this.loadBlockedDomains()
+
         // Block image loading to save data traffic
         await context.route('**/*', (route) => {
             const resourceType = route.request().resourceType()
             const url = route.request().url()
+
+            // Bloquear domínios da lista
+            if (blockedDomains.some(domain => url.includes(domain))) {
+                return route.abort()
+            }
 
             // Bloquear imagens
             if (resourceType === 'image' || resourceType === 'media') {
