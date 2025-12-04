@@ -1,3 +1,56 @@
+# Pagamentos e paywalls
+pay.google.com
+buy.tinypass.com
+tinypass.com
+piano.io
+paypal.com
+stripe.com
+braintreepayments.com
+venmo.com
+square.com
+squareup.com
+checkout.com
+adyen.com
+worldpay.com
+2checkout.com
+authorize.net
+payoneer.com
+skrill.com
+payza.com
+dwolla.com
+klarna.com
+afterpay.com
+affirm.com
+sezzle.com
+quadpay.com
+splitit.com
+payu.com
+razorpay.com
+paytm.com
+instamojo.com
+cashfree.com
+mercadopago.com
+mercadolibre.com
+pagseguro.uol.com.br
+cielo.com.br
+rede.com.br
+getnet.com.br
+stone.com.br
+wirecard.com
+paysafecard.com
+neteller.com
+ecopayz.com
+muchbetter.com
+astropay.com
+neosurf.com
+jeton.com
+paymentwall.com
+xsolla.com
+
+# Servidores de anúncios
+smartadserver.com
+googleadservices.com
+
 # Domínios governamentais brasileiros que consomem muita banda
 bcb.gov.br
 vlibras.gov.br
@@ -257,6 +310,7 @@ sohu.com
 qq.com
 tencent.com
 baidu.com
+free.fr
 
 # Tracking e Analytics (AdGuard DNS)
 abcounter.de
