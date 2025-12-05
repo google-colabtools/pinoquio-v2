@@ -131,7 +131,11 @@ class Browser {
             }
 
             // Bloquear imagens
-            if (resourceType === 'image' || resourceType === 'media') {
+            if (
+                resourceType === 'image' || 
+                resourceType === 'media' ||
+                url.endsWith('.svg')
+            ) {
                 return route.abort()
             }
 
