@@ -113,6 +113,11 @@ export class Login {
 
   // --------------- Button Prompt Handling ---------------
   private async handleMultipleButtonPrompts(page: Page) {
+    // Wait for page to be ready and avoid execution context issues
+    try {
+      await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+    } catch {}
+
     const buttonConfigs = [
       {
         selector: 'button[data-testid="secondaryButton"]',
@@ -143,10 +148,15 @@ export class Login {
             
             // Para botão "Next", verificar se campo de senha existe - se existir, ignorar
             if (shouldClick && config.name === 'Next') {
-              const passwordField = await page.waitForSelector('input[type="password"]', { timeout: 1000 }).catch(() => null)
-              if (passwordField) {
-                this.bot.log(this.bot.isMobile, 'LOGIN', `Password field detected, skipping "${config.name}" button click`)
-                return // Ignora a função completamente
+              try {
+                await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+                const passwordField = await page.waitForSelector('input[type="password"]', { timeout: 1000 }).catch(() => null);
+                if (passwordField) {
+                  this.bot.log(this.bot.isMobile, 'LOGIN', `Password field detected, skipping "${config.name}" button click`);
+                  return; // Ignora a função completamente
+                }
+              } catch (err) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', `Error checking password field: ${err}`, 'warn');
               }
             }
           }
@@ -158,12 +168,18 @@ export class Login {
             const screenshotPath = `./reports/next_button_${timestamp}.png`;
             await this.safeScreenshot(page, screenshotPath, 'next_button');
             const htmlPath = `./reports/next_button_${timestamp}.html`;
-            const html = await page.content();
-            await fs.promises.writeFile(htmlPath, html);
+            const html = await page.content().catch(() => '<html><body>Could not get content</body></html>');
+            await fs.promises.writeFile(htmlPath, html).catch(() => {});
             //===================================
-            await button.click()
-            this.bot.log(this.bot.isMobile, 'LOGIN', `"${config.name}" button found and clicked (attempt ${attempt}).`)
-            await this.bot.utils.wait(5000) // Espera antes de tentar novamente
+            try {
+              await button.click();
+              this.bot.log(this.bot.isMobile, 'LOGIN', `"${config.name}" button found and clicked (attempt ${attempt}).`);
+              // Wait for potential navigation to complete
+              await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+              await this.bot.utils.wait(2000);
+            } catch (clickError) {
+              this.bot.log(this.bot.isMobile, 'LOGIN', `Error clicking ${config.name} button: ${clickError}`, 'warn');
+            }
           } else {
             break // Se não passou na verificação de texto, para o loop
           }
@@ -308,14 +324,41 @@ export class Login {
   }
 
   private async inputPasswordOr2FA(page: Page, password: string) {
-    await this.handleMultipleButtonPrompts(page)
+    await this.handleMultipleButtonPrompts(page);
+    
+    // Wait for page to be stable
+    await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+    
     // Some flows require switching to password first
-    const switchBtn = await page.waitForSelector('#idA_PWD_SwitchToPassword', { timeout: 1500 }).catch(() => null)
-    if (switchBtn) { await switchBtn.click().catch(() => { }); await this.bot.utils.wait(1000) }
-    const otherWaysButton = await page.$('span[role="button"]:has-text("Other ways to sign in")');
-    otherWaysButton && (await otherWaysButton.click(), await this.bot.utils.wait(1000));
-    const UsePasswordButton = await page.$('span[role="button"]:has-text("Use your password")');
-    UsePasswordButton && await UsePasswordButton.click();
+    const switchBtn = await page.waitForSelector('#idA_PWD_SwitchToPassword', { timeout: 1500 }).catch(() => null);
+    if (switchBtn) { 
+      await switchBtn.click().catch(() => { }); 
+      await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+      await this.bot.utils.wait(1000);
+    }
+    
+    // Use waitForSelector instead of page.$ to avoid execution context issues
+    try {
+      const otherWaysButton = await page.waitForSelector('span[role="button"]:has-text("Other ways to sign in")', { timeout: 1500 }).catch(() => null);
+      if (otherWaysButton) {
+        await otherWaysButton.click().catch(() => {});
+        await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+        await this.bot.utils.wait(1000);
+      }
+    } catch (err) {
+      this.bot.log(this.bot.isMobile, 'LOGIN', `Other ways button error: ${err}`, 'warn');
+    }
+    
+    try {
+      const UsePasswordButton = await page.waitForSelector('span[role="button"]:has-text("Use your password")', { timeout: 1500 }).catch(() => null);
+      if (UsePasswordButton) {
+        await UsePasswordButton.click().catch(() => {});
+        await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+        await this.bot.utils.wait(1000);
+      }
+    } catch (err) {
+      this.bot.log(this.bot.isMobile, 'LOGIN', `Use password button error: ${err}`, 'warn');
+    }
     // Rare flow: list of methods -> choose password
     const passwordField = await page.waitForSelector(SELECTORS.passwordInput, { timeout: 4000 }).catch(() => null)
     if (!passwordField) {
@@ -488,11 +531,16 @@ export class Login {
 
   // --------------- Passkey / Dialog Handling ---------------
   private async handlePasskeyPrompts(page: Page, context: 'main' | 'oauth') {
+    // Ensure page is stable before checking for prompts
+    try {
+      await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+    } catch {}
+
     let did = false
     // Video heuristic
     const biometric = await page.waitForSelector(SELECTORS.biometricVideo, { timeout: 500 }).catch(() => null)
     if (biometric) {
-      const btn = await page.$(SELECTORS.passkeySecondary)
+      const btn = await page.waitForSelector(SELECTORS.passkeySecondary, { timeout: 500 }).catch(() => null)
       if (btn) { await btn.click().catch(() => { }); did = true; this.logPasskeyOnce('video heuristic') }
     }
     if (!did) {
@@ -507,11 +555,13 @@ export class Login {
         if (/skip for now/i.test(text)) { await secBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('secondary button text') }
       }
       if (!did) {
-        const textBtn = await page.locator('xpath=//button[contains(normalize-space(.),"Skip for now")]').first()
-        if (await textBtn.isVisible().catch(() => false)) { await textBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('text fallback') }
+        try {
+          const textBtn = await page.locator('xpath=//button[contains(normalize-space(.),"Skip for now")]').first()
+          if (await textBtn.isVisible().catch(() => false)) { await textBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('text fallback') }
+        } catch {}
       }
       if (!did) {
-        const close = await page.$('#close-button')
+        const close = await page.waitForSelector('#close-button', { timeout: 500 }).catch(() => null)
         if (close) { await close.click().catch(() => { }); did = true; this.logPasskeyOnce('close button') }
       }
     }
@@ -519,7 +569,7 @@ export class Login {
     // KMSI prompt
     const kmsi = await page.waitForSelector(SELECTORS.kmsiVideo, { timeout: 400 }).catch(() => null)
     if (kmsi) {
-      const yes = await page.$(SELECTORS.passkeyPrimary)
+      const yes = await page.waitForSelector(SELECTORS.passkeyPrimary, { timeout: 500 }).catch(() => null)
       if (yes) { await yes.click().catch(() => { }); did = true; this.bot.log(this.bot.isMobile, 'LOGIN-KMSI', 'Accepted KMSI prompt') }
     }
 

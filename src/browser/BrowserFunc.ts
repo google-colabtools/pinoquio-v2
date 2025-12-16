@@ -101,6 +101,12 @@ export default class BrowserFunc {
                     // If activities are found, exit the loop
                     await page.waitForSelector('#more-activities', { timeout: 1000 })
                     this.bot.log(this.bot.isMobile, 'GO-HOME', 'Visited homepage successfully')
+                    
+                    // Check and handle "Activate now" promotion (desktop only, effect applies to both)
+                    if (!this.bot.isMobile) {
+                        await this.handleActivateNowPromotion(page)
+                    }
+                    
                     break
 
                 } catch (error) {
@@ -159,6 +165,12 @@ export default class BrowserFunc {
                     }
                 } else {
                     this.bot.log(this.bot.isMobile, 'GO-HOME', 'Visited homepage successfully')
+                    
+                    // Check and handle "Activate now" promotion (desktop only, effect applies to both)
+                    if (!this.bot.isMobile) {
+                        await this.handleActivateNowPromotion(page)
+                    }
+                    
                     break
                 }
 
@@ -555,6 +567,85 @@ export default class BrowserFunc {
         }
 
         return selector
+    }
+
+    /**
+     * Check for "Activate now" promotion and handle it
+     * @param {Page} page Playwright page
+     */
+    async handleActivateNowPromotion(page: Page) {
+        try {
+            await this.bot.utils.wait(2000)
+            
+            // Search for "Activate now" text in the page
+            const activateNowElements = await page.getByText('Activate now', { exact: true }).all()
+            
+            if (activateNowElements.length === 0) {
+                return
+            }
+            
+            // Click the first visible "Activate now"
+            let clickedFirst = false
+            for (const element of activateNowElements) {
+                const isVisible = await element.isVisible().catch(() => false)
+                if (isVisible) {
+                    this.bot.log(this.bot.isMobile, 'ACTIVATE-PROMO', 'Special promotion found, verifying...')
+                    await element.click()
+                    clickedFirst = true
+                    break
+                }
+            }
+            
+            if (!clickedFirst) {
+                return
+            }
+            
+            await this.bot.utils.wait(2000)
+            
+            // Wait for the popup to appear
+            const popupSelector = 'div[role="dialog"][aria-label="Rewards Dialog"]'
+            const popup = await page.waitForSelector(popupSelector, { state: 'visible', timeout: 5000 }).catch(() => null)
+            
+            if (popup) {
+                await this.bot.utils.wait(2000)
+                
+                // Check if popup contains "Double your points" text
+                const popupText = await popup.textContent()
+                if (!popupText?.includes('Double your points')) {
+                    // Not the expected promotion, ignore it
+                    this.bot.log(this.bot.isMobile, 'ACTIVATE-PROMO', 'Unknown special promotion detected and rejected!')
+                    return
+                }
+                
+                // Find and click "Activate now" in popup
+                const popupActivateBtn = await page.$('div[role="dialog"] a.c-call-to-action')
+                
+                if (popupActivateBtn) {
+                    const btnText = await popupActivateBtn.textContent()
+                    
+                    if (btnText?.includes('Activate now')) {
+                        // Listen for new page/tab opening
+                        const newPagePromise = page.context().waitForEvent('page', { timeout: 5000 })
+                        
+                        await popupActivateBtn.click()
+                        await this.bot.utils.wait(1000)
+                        
+                        // Close the new tab if it opens
+                        try {
+                            const newPage = await newPagePromise
+                            await this.bot.utils.wait(8000)
+                            await newPage.close()
+                            this.bot.log(this.bot.isMobile, 'ACTIVATE-PROMO', 'Special promotion Double your points activated successfully!')
+                        } catch (error) {
+                            // Tab already closed or didn't open
+                        }
+                    }
+                }
+            }
+            
+        } catch (error) {
+            // Silently handle errors as promotion might not always be available
+        }
     }
 
     async closeBrowser(browser: BrowserContext, email: string) {
