@@ -53,7 +53,9 @@ class Browser {
             try {
                 // Dynamically import child_process to avoid overhead otherwise
                 const { execSync } = await import('child_process')
-                execSync('npx playwright install chromium', { stdio: 'ignore' })
+                const browserType = (process.env.ENV_BROWSER || 'chromium').toLowerCase()
+                const installCmd = browserType === 'firefox' ? 'npx playwright install firefox' : 'npx playwright install chromium'
+                execSync(installCmd, { stdio: 'ignore' })
             } catch { /* silent */ }
         }
 
@@ -66,8 +68,11 @@ class Browser {
             const headlessValue = envForceHeadless ? true : ((cfgAny['headless'] as boolean | undefined) ?? (cfgAny['browser'] && (cfgAny['browser'] as Record<string, unknown>)['headless'] as boolean | undefined) ?? false)
             const headless: boolean = Boolean(headlessValue)
 
-            const useEdge = process.env.EDGE_ENABLED === 'true'
-            const engineName = useEdge ? 'msedge' : 'chromium'
+            // ENV_BROWSER: 'chromium' | 'edge' | 'firefox' (default: 'chromium')
+            const browserChoice = (process.env.ENV_BROWSER || 'chromium').toLowerCase()
+            const isFirefox = browserChoice === 'firefox'
+            const isEdge = browserChoice === 'edge'
+            const engineName = isFirefox ? 'firefox' : isEdge ? 'msedge' : 'chromium'
             this.bot.log(this.bot.isMobile, 'BROWSER', `Launching ${engineName} (headless=${headless})`) // explicit engine log
             
             const baseArgs = [
@@ -90,17 +95,32 @@ class Browser {
                 '--disable-sync', // Disable sync features
             ]
             
-            browser = await playwright.chromium.launch({
-                ...(useEdge && { channel: 'msedge' }), // Uses Edge only if EDGE_ENABLED=true
-                headless,
-                ...(proxy.url && { proxy: { username: proxy.username, password: proxy.password, server: `${proxy.url}:${proxy.port}` } }),
-                args: useEdge ? [...baseArgs, ...edgeSpecificArgs] : baseArgs
-            })
+            // Firefox uses a different Playwright engine
+            if (isFirefox) {
+                browser = await playwright.firefox.launch({
+                    headless,
+                    ...(proxy.url && { proxy: { username: proxy.username, password: proxy.password, server: `${proxy.url}:${proxy.port}` } }),
+                    firefoxUserPrefs: {
+                        'permissions.default.image': 2, // Disable images
+                        'media.autoplay.default': 5, // Disable autoplay
+                        'dom.webnotifications.enabled': false, // Disable notifications
+                    }
+                })
+            } else {
+                browser = await playwright.chromium.launch({
+                    ...(isEdge && { channel: 'msedge' }), // Uses Edge only if ENV_BROWSER=edge
+                    headless,
+                    ...(proxy.url && { proxy: { username: proxy.username, password: proxy.password, server: `${proxy.url}:${proxy.port}` } }),
+                    args: isEdge ? [...baseArgs, ...edgeSpecificArgs] : baseArgs
+                })
+            }
         } catch (e: unknown) {
             const msg = (e instanceof Error ? e.message : String(e))
             // Common missing browser executable guidance
             if (/Executable doesn't exist/i.test(msg)) {
-                this.bot.log(this.bot.isMobile, 'BROWSER', 'Chromium not installed for Playwright. Run: "npx playwright install chromium" (or set AUTO_INSTALL_BROWSERS=1 to auto attempt).', 'error')
+                const browserType = (process.env.ENV_BROWSER || 'chromium').toLowerCase()
+                const installCmd = browserType === 'firefox' ? 'npx playwright install firefox' : 'npx playwright install chromium'
+                this.bot.log(this.bot.isMobile, 'BROWSER', `Browser not installed for Playwright. Run: "${installCmd}" (or set AUTO_INSTALL_BROWSERS=1 to auto attempt).`, 'error')
             } else {
                 this.bot.log(this.bot.isMobile, 'BROWSER', 'Failed to launch browser: ' + msg, 'error')
             }
@@ -203,10 +223,14 @@ class Browser {
     }
 
     async generateFingerprint() {
+        // Map ENV_BROWSER to fingerprint browser name
+        const browserChoice = (process.env.ENV_BROWSER || 'chromium').toLowerCase()
+        const fpBrowserName = browserChoice === 'firefox' ? 'firefox' : browserChoice === 'edge' ? 'edge' : 'chrome'
+        
         const fingerPrintData = new FingerprintGenerator().getFingerprint({
             devices: this.bot.isMobile ? ['mobile'] : ['desktop'],
             operatingSystems: this.bot.isMobile ? ['android'] : ['windows'],
-            browsers: [{ name: 'edge' }]
+            browsers: [{ name: fpBrowserName as 'chrome' | 'edge' | 'firefox' }]
         })
 
         const updatedFingerPrintData = await updateFingerprintUserAgent(fingerPrintData, this.bot.isMobile)
