@@ -15,13 +15,14 @@ from urllib.parse import urlparse
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# SISTEMA DE TIMEOUT DE INATIVIDADE
+# SISTEMA DE TIMEOUT DE INATIVIDADE (COM REINÍCIO)
 # Implementado mecanismo que encerra automaticamente bots que ficarem
 # mais de 30 minutos sem produzir saída (sem ações).
 # - Monitora timestamp da última atividade de cada bot
 # - Captura e armazena a última mensagem de atividade
 # - Verifica timeout tanto na saída quanto em verificação ativa
-# - Não reinicia bots encerrados por timeout
+# - TENTA REINICIAR 1x antes de encerrar definitivamente por inatividade
+# - Apenas na 2ª detecção de inatividade o bot é encerrado permanentemente
 # - Envia notificação Discord informando o encerramento + última atividade
 # - Estado: 'inactive_timeout' para bots encerrados por inatividade
 
@@ -1229,6 +1230,10 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
     # Controle de estado dos bots (novo)
     bot_states = {bot: 'running' for bot in bots_to_run}  # 'running', 'completed', 'failed', 'banned', 'inactive_timeout'
     
+    # Contador de reinicializações por timeout de inatividade para cada bot
+    timeout_restart_counts = {bot: 0 for bot in bots_to_run}
+    max_timeout_restarts = 1  # Número máximo de tentativas de reinício após timeout por inatividade
+    
     # Controle de tempo de última atividade para cada bot
     bot_last_activity = {bot: time.time() for bot in bots_to_run}
     
@@ -1453,24 +1458,72 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                             if time_since_last_activity > INACTIVITY_TIMEOUT:
                                 print_colored('Sistema', f"Bot {bot_letter} ficou inativo por {int(time_since_last_activity/60)} minutos. Encerrando por timeout de inatividade.", is_warning=True)
                                 
-                                # Marcar como encerrado por inatividade
-                                bot_states[bot_letter] = 'inactive_timeout'
-                                
-                                # Enviar mensagem para Discord sobre o encerramento por inatividade
-                                last_msg = bot_last_message.get(bot_letter, "Nenhuma atividade recente")
-                                threading.Thread(target=send_discord_timeout_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, last_msg)).start()
-                                
-                                # Encerrar o processo
-                                try:
-                                    process.terminate()
-                                    time.sleep(5)
-                                    if process.poll() is None:
-                                        process.kill()
-                                    print_colored('Sistema', f"Bot {bot_letter} encerrado por timeout de inatividade.", is_warning=True)
-                                except Exception as e:
-                                    print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
-                                
-                                return  # Encerrar o monitoramento deste bot
+                                # Verificar se já tentou reiniciar por timeout
+                                if timeout_restart_counts[bot_letter] < max_timeout_restarts:
+                                    # Ainda pode tentar reiniciar
+                                    timeout_restart_counts[bot_letter] += 1
+                                    print_colored('Sistema', f"Bot {bot_letter} inativo - tentando reiniciar ({timeout_restart_counts[bot_letter]}/{max_timeout_restarts})...", is_warning=True)
+                                    
+                                    # Enviar mensagem para Discord sobre reinício por inatividade
+                                    last_msg = bot_last_message.get(bot_letter, "Nenhuma atividade recente")
+                                    
+                                    # Encerrar o processo atual
+                                    try:
+                                        process.terminate()
+                                        time.sleep(5)
+                                        if process.poll() is None:
+                                            process.kill()
+                                    except Exception as e:
+                                        print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
+                                    
+                                    # Remover o processo antigo do dicionário
+                                    with processes_lock:
+                                        if bot_letter in processes:
+                                            del processes[bot_letter]
+                                    
+                                    # Resetar o timestamp de última atividade
+                                    bot_last_activity[bot_letter] = time.time()
+                                    bot_last_message[bot_letter] = "Bot reiniciado após timeout de inatividade"
+                                    
+                                    # Iniciar uma nova thread para reiniciar o bot
+                                    def restart_bot_timeout_wrapper():
+                                        time.sleep(10)
+                                        new_process = start_delayed_bot(bot_letter, 0, is_restart=True)
+                                        if new_process:
+                                            with processes_lock:
+                                                processes[bot_letter] = new_process
+                                            bot_states[bot_letter] = 'running'
+                                            print_colored('Sistema', f"Bot {bot_letter} reiniciado com sucesso após timeout de inatividade.", is_success=True)
+                                        else:
+                                            print_colored('Sistema', f"Falha ao reiniciar Bot {bot_letter} após timeout.", is_error=True)
+                                            bot_states[bot_letter] = 'inactive_timeout'
+                                    
+                                    restart_thread = threading.Thread(target=restart_bot_timeout_wrapper)
+                                    restart_thread.daemon = False
+                                    restart_thread.start()
+                                    return
+                                else:
+                                    # Já tentou reiniciar, agora encerra definitivamente
+                                    print_colored('Sistema', f"Bot {bot_letter} já foi reiniciado {max_timeout_restarts}x por inatividade. Encerrando definitivamente.", is_warning=True)
+                                    
+                                    # Marcar como encerrado por inatividade
+                                    bot_states[bot_letter] = 'inactive_timeout'
+                                    
+                                    # Enviar mensagem para Discord sobre o encerramento por inatividade
+                                    last_msg = bot_last_message.get(bot_letter, "Nenhuma atividade recente")
+                                    threading.Thread(target=send_discord_timeout_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, last_msg)).start()
+                                    
+                                    # Encerrar o processo
+                                    try:
+                                        process.terminate()
+                                        time.sleep(5)
+                                        if process.poll() is None:
+                                            process.kill()
+                                        print_colored('Sistema', f"Bot {bot_letter} encerrado definitivamente por timeout de inatividade.", is_warning=True)
+                                    except Exception as e:
+                                        print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
+                                    
+                                    return  # Encerrar o monitoramento deste bot
                             
                         # Verificar se o processo está sem saída por muito tempo
                         if no_output_counter > 100:
@@ -1615,32 +1668,72 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                         if time_since_last_activity > INACTIVITY_TIMEOUT:
                             bots_to_terminate.append((bot_letter, process, time_since_last_activity))
             
-            # Encerrar bots que excederam o timeout
+            # Encerrar ou reiniciar bots que excederam o timeout
             for bot_letter, process, inactive_time in bots_to_terminate:
-                print_colored('Sistema', f"Bot {bot_letter} detectado como inativo por {int(inactive_time/60)} minutos. Encerrando...", is_warning=True)
-                
-                # Marcar como encerrado por inatividade
-                bot_states[bot_letter] = 'inactive_timeout'
-                
-                # Enviar notificação para Discord
-                last_msg = bot_last_message.get(bot_letter, "Nenhuma atividade recente")
-                threading.Thread(target=send_discord_timeout_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, last_msg)).start()
-                
-                # Encerrar o processo
-                try:
-                    process.terminate()
-                    time.sleep(3)
-                    if process.poll() is None:
-                        process.kill()
-                    print_colored('Sistema', f"Bot {bot_letter} encerrado por timeout de inatividade (verificação ativa).", is_warning=True)
+                # Verificar se ainda pode tentar reiniciar
+                if timeout_restart_counts[bot_letter] < max_timeout_restarts:
+                    timeout_restart_counts[bot_letter] += 1
+                    print_colored('Sistema', f"Bot {bot_letter} inativo por {int(inactive_time/60)} min - reiniciando ({timeout_restart_counts[bot_letter]}/{max_timeout_restarts})...", is_warning=True)
+                    
+                    # Encerrar o processo atual
+                    try:
+                        process.terminate()
+                        time.sleep(3)
+                        if process.poll() is None:
+                            process.kill()
+                    except Exception as e:
+                        print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
                     
                     # Remover do dicionário de processos
                     with processes_lock:
                         if bot_letter in processes:
                             del processes[bot_letter]
-                            
-                except Exception as e:
-                    print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
+                    
+                    # Resetar timestamp e reiniciar
+                    bot_last_activity[bot_letter] = time.time()
+                    bot_last_message[bot_letter] = "Bot reiniciado após timeout de inatividade (check ativo)"
+                    
+                    def restart_bot_check_wrapper(bl=bot_letter):
+                        time.sleep(10)
+                        new_process = start_delayed_bot(bl, 0, is_restart=True)
+                        if new_process:
+                            with processes_lock:
+                                processes[bl] = new_process
+                            bot_states[bl] = 'running'
+                            print_colored('Sistema', f"Bot {bl} reiniciado com sucesso (verificação ativa).", is_success=True)
+                        else:
+                            print_colored('Sistema', f"Falha ao reiniciar Bot {bl}.", is_error=True)
+                            bot_states[bl] = 'inactive_timeout'
+                    
+                    restart_thread = threading.Thread(target=restart_bot_check_wrapper)
+                    restart_thread.daemon = False
+                    restart_thread.start()
+                else:
+                    # Já tentou reiniciar, encerra definitivamente
+                    print_colored('Sistema', f"Bot {bot_letter} inativo por {int(inactive_time/60)} min. Já reiniciado {max_timeout_restarts}x - encerrando definitivamente.", is_warning=True)
+                    
+                    # Marcar como encerrado por inatividade
+                    bot_states[bot_letter] = 'inactive_timeout'
+                    
+                    # Enviar notificação para Discord
+                    last_msg = bot_last_message.get(bot_letter, "Nenhuma atividade recente")
+                    threading.Thread(target=send_discord_timeout_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, last_msg)).start()
+                    
+                    # Encerrar o processo
+                    try:
+                        process.terminate()
+                        time.sleep(3)
+                        if process.poll() is None:
+                            process.kill()
+                        print_colored('Sistema', f"Bot {bot_letter} encerrado definitivamente por timeout (verificação ativa).", is_warning=True)
+                        
+                        # Remover do dicionário de processos
+                        with processes_lock:
+                            if bot_letter in processes:
+                                del processes[bot_letter]
+                                
+                    except Exception as e:
+                        print_colored('Sistema', f"Erro ao encerrar Bot {bot_letter}: {str(e)}", is_error=True)
         
         while True:
             # Verificar timeouts de inatividade a cada ciclo
