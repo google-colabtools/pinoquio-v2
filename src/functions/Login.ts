@@ -548,16 +548,30 @@ export class Login {
       const secBtn = await page.waitForSelector(SELECTORS.passkeySecondary, { timeout: 500 }).catch(() => null)
       const primBtn = await page.waitForSelector(SELECTORS.passkeyPrimary, { timeout: 500 }).catch(() => null)
       const title = (titleEl ? (await titleEl.textContent()) : '')?.trim() || ''
-      const looksLike = /sign in faster|passkey|fingerprint|face|pin/i.test(title)
+      // Passkey/biometric detection patterns
+      const looksLike = /sign in faster|passkey|fingerprint|face|pin|setting up your passkey|biometr|security key/i.test(title)
       if (looksLike && secBtn) { await secBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('title heuristic ' + title) }
       else if (!did && secBtn && primBtn) {
         const text = (await secBtn.textContent() || '').trim()
-        if (/skip for now/i.test(text)) { await secBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('secondary button text') }
+        if (/skip for now|not now|cancel|no thanks/i.test(text)) { 
+          await secBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('secondary button text') 
+        }
       }
       if (!did) {
         try {
-          const textBtn = await page.locator('xpath=//button[contains(normalize-space(.),"Skip for now")]').first()
-          if (await textBtn.isVisible().catch(() => false)) { await textBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('text fallback') }
+          // Skip button patterns
+          const skipPatterns = [
+            'xpath=//button[contains(normalize-space(.),"Skip for now")]',
+            'xpath=//button[contains(normalize-space(.),"Not now")]',
+            'xpath=//button[contains(normalize-space(.),"Cancel")]',
+            'xpath=//a[contains(normalize-space(.),"Skip for now")]'
+          ]
+          for (const pattern of skipPatterns) {
+            const textBtn = await page.locator(pattern).first()
+            if (await textBtn.isVisible().catch(() => false)) { 
+              await textBtn.click().catch(() => { }); did = true; this.logPasskeyOnce('text fallback: ' + pattern); break 
+            }
+          }
         } catch {}
       }
       if (!did) {
@@ -815,12 +829,52 @@ export class Login {
 
   // --------------- Infrastructure ---------------
   private async disableFido(page: Page) {
+    // Intercept GetCredentialType to disable ALL FIDO/WebAuthn/Passkey capabilities
     await page.route('**/GetCredentialType.srf*', route => {
       try {
         const body = JSON.parse(route.request().postData() || '{}')
         body.isFidoSupported = false
+        body.isRemoteNGCSupported = false
+        body.isFidoSupported = false
+        body.isAccessPassSupported = false
         route.continue({ postData: JSON.stringify(body) })
       } catch { route.continue() }
+    }).catch(() => { })
+
+    // Intercept credential responses to disable passkey options
+    await page.route('**/*GetCredentialType*', route => {
+      const url = route.request().url()
+      if (url.includes('GetCredentialType')) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            Credentials: { FidoParams: null, RemoteNgcParams: null, AccessPassParams: null },
+            IsFidoSupported: false,
+            IsRemoteNGCSupported: false,
+            IsAccessPassSupported: false
+          })
+        }).catch(() => route.continue())
+      } else {
+        route.continue()
+      }
+    }).catch(() => { })
+
+    // Block WebAuthn API calls at browser level to prevent native Windows Security dialog
+    await page.addInitScript(() => {
+      // Disable WebAuthn/Passkey API completely
+      Object.defineProperty(navigator, 'credentials', {
+        get: () => ({
+          create: () => Promise.reject(new Error('WebAuthn disabled')),
+          get: () => Promise.reject(new Error('WebAuthn disabled')),
+          preventSilentAccess: () => Promise.resolve(),
+          store: () => Promise.reject(new Error('WebAuthn disabled'))
+        })
+      })
+      // Report no PublicKeyCredential support
+      if (typeof PublicKeyCredential !== 'undefined') {
+        Object.defineProperty(window, 'PublicKeyCredential', { value: undefined, writable: false })
+      }
     }).catch(() => { })
   }
 }
