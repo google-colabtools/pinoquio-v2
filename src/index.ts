@@ -503,10 +503,12 @@ export class MicrosoftRewardsBot {
                 const mobileInstance = new MicrosoftRewardsBot(true)
                 mobileInstance.axios = this.axios
                 // Run both and capture results with detailed logging
-                const desktopPromise = this.Desktop(account).catch(e => {
+                const desktopPromise = this.Desktop(account).catch(async e => {
                     const msg = e instanceof Error ? e.message : String(e)
                     log(false, 'TASK', `Desktop flow failed early for ${account.email}: ${msg}`,'error')
                     log(false, 'TASK', 'Terminating bot due to desktop flow failure', 'error')
+                    // Capture diagnostic screenshot before terminating
+                    await this.captureFlowFailureDiagnostics('desktop', account.email, e)
                     const bd = detectBanReason(e)
                     if (bd.status) {
                         banned.status = true; banned.reason = bd.reason.substring(0,200)
@@ -515,10 +517,12 @@ export class MicrosoftRewardsBot {
                     errors.push(formatFullErr('desktop', e))
                     process.exit(1)
                 })
-                const mobilePromise = mobileInstance.Mobile(account).catch(e => {
+                const mobilePromise = mobileInstance.Mobile(account).catch(async e => {
                     const msg = e instanceof Error ? e.message : String(e)
                     log(true, 'TASK', `Mobile flow failed early for ${account.email}: ${msg}`,'error')
                     log(true, 'TASK', 'Terminating bot due to mobile flow failure', 'error')
+                    // Capture diagnostic screenshot before terminating
+                    await mobileInstance.captureFlowFailureDiagnostics('mobile', account.email, e)
                     const bd = detectBanReason(e)
                     if (bd.status) {
                         banned.status = true; banned.reason = bd.reason.substring(0,200)
@@ -538,10 +542,12 @@ export class MicrosoftRewardsBot {
                 }
             } else {
                 this.isMobile = false
-                const desktopResult = await this.Desktop(account).catch(e => {
+                const desktopResult = await this.Desktop(account).catch(async e => {
                     const msg = e instanceof Error ? e.message : String(e)
                     log(false, 'TASK', `Desktop flow failed early for ${account.email}: ${msg}`,'error')
                     log(false, 'TASK', 'Terminating bot due to desktop flow failure', 'error')
+                    // Capture diagnostic screenshot before terminating
+                    await this.captureFlowFailureDiagnostics('desktop', account.email, e)
                     const bd = detectBanReason(e)
                     if (bd.status) {
                         banned.status = true; banned.reason = bd.reason.substring(0,200)
@@ -558,10 +564,12 @@ export class MicrosoftRewardsBot {
                 // If banned or compromised detected, skip mobile to save time
                 if (!banned.status && !this.compromisedModeActive) {
                     this.isMobile = true
-                    const mobileResult = await this.Mobile(account).catch(e => {
+                    const mobileResult = await this.Mobile(account).catch(async e => {
                         const msg = e instanceof Error ? e.message : String(e)
                         log(true, 'TASK', `Mobile flow failed early for ${account.email}: ${msg}`,'error')
                         log(true, 'TASK', 'Terminating bot due to mobile flow failure', 'error')
+                        // Capture diagnostic screenshot before terminating
+                        await this.captureFlowFailureDiagnostics('mobile', account.email, e)
                         const bd = detectBanReason(e)
                         if (bd.status) {
                             banned.status = true; banned.reason = bd.reason.substring(0,200)
@@ -649,6 +657,24 @@ export class MicrosoftRewardsBot {
             await this.runAutoUpdate().catch(() => {/* ignore update errors */})
         }
         process.exit()
+    }
+
+    /** Capture diagnostic screenshot/HTML when a flow fails catastrophically. */
+    public async captureFlowFailureDiagnostics(flowType: 'desktop' | 'mobile', email: string, error: unknown): Promise<void> {
+        try {
+            const page = this.homePage
+            if (!page || page.isClosed()) {
+                log(this.isMobile, 'DIAG', `Cannot capture ${flowType} failure diagnostics: page unavailable`, 'warn')
+                return
+            }
+            const errMsg = error instanceof Error ? error.message : String(error)
+            const safeErr = errMsg.replace(/[^a-z0-9]/gi, '_').slice(0, 30)
+            const label = `flow_failure_${flowType}_${email.split('@')[0]}_${safeErr}`
+            await this.browser.utils.captureDiagnostics(page, label)
+            log(this.isMobile, 'DIAG', `Captured ${flowType} flow failure diagnostics for ${email}`)
+        } catch (diagErr) {
+            log(this.isMobile, 'DIAG', `Failed to capture ${flowType} failure diagnostics: ${diagErr instanceof Error ? diagErr.message : diagErr}`, 'warn')
+        }
     }
 
     /** Send immediate ban alert if configured. */
