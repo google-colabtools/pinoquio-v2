@@ -574,6 +574,74 @@ def send_discord_max_restart_alert(bot_letter, discord_webhook_url_br, discord_w
         print(f"❌ Erro ao enviar notificação de max restart para Discord: {str(e)}")
         return False
 
+def delete_bot_cookies(bot_letter):
+    """Deleta os arquivos de cookies de um bot específico baseado no perfil da sessão"""
+    try:
+        config_file = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_{bot_letter}", "src", "config.json")
+        
+        if not os.path.exists(config_file):
+            print(f"❌ Arquivo config.json não encontrado para Bot {bot_letter}")
+            return False
+        
+        config_data = load_json_with_comments(config_file)
+        if not config_data:
+            print(f"❌ Não foi possível carregar config.json do Bot {bot_letter}")
+            return False
+        
+        session_path = config_data.get('sessionPath', '')
+        
+        # Extrair o nome do perfil da sessão (ex: multi-BR01)
+        session_profile = None
+        if session_path and 'sessions/_' in session_path:
+            session_profile = session_path.split('sessions/_')[1]
+        
+        if not session_profile:
+            print(f"❌ Não foi possível identificar o perfil da sessão para Bot {bot_letter}")
+            return False
+        
+        # Caminho do diretório de cookies compartilhado
+        # Extrair BOT_ACCOUNT do sessionPath (ex: multi-BR01 -> multi-BR)
+        # O padrão é: sessions/_multi-BR01, então precisamos do diretório pai
+        bot_account = bot_acc_env  # Usa a variável global BOT_ACCOUNT do .env
+        
+        if not bot_account:
+            # Tentar extrair do session_profile (remover números finais)
+            import re
+            match = re.match(r'^(.*?)\d*$', session_profile)
+            if match:
+                bot_account = match.group(1).rstrip('0123456789')
+        
+        cookies_dir = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_shared", "sessions", f"_{bot_account}", session_profile)
+        
+        if os.path.exists(cookies_dir):
+            # Deletar todos os arquivos de cookies no diretório
+            deleted_files = []
+            for filename in os.listdir(cookies_dir):
+                file_path = os.path.join(cookies_dir, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        deleted_files.append(filename)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                        deleted_files.append(f"{filename}/")
+                except Exception as e:
+                    print(f"⚠️ Erro ao deletar {file_path}: {e}")
+            
+            if deleted_files:
+                print(f"🗑️ Cookies deletados para Bot {bot_letter} [{session_profile}]: {', '.join(deleted_files)}")
+                return True
+            else:
+                print(f"⚠️ Nenhum arquivo de cookie encontrado em {cookies_dir}")
+                return False
+        else:
+            print(f"⚠️ Diretório de cookies não encontrado: {cookies_dir}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro ao deletar cookies do Bot {bot_letter}: {str(e)}")
+        return False
+
 def send_discord_suspension_alert(bot_letter, discord_webhook_url_br, discord_webhook_url_us):
     """Envia uma mensagem para o webhook do Discord quando uma conta é suspensa"""
     global banned_bots, last_banned_alerts
@@ -1429,6 +1497,14 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                 bot_states[bot_letter] = 'banned'  # Marcar como banido
                                 threading.Thread(target=send_discord_suspension_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us)).start()
                             
+                            # Verificar erro de cookies inválidos e deletar cookies automaticamente
+                            if "Invalid cookie fields" in line:
+                                print_colored('Sistema', f"Erro de cookies inválidos detectado no Bot {bot_letter}. Deletando cookies...", is_warning=True)
+                                if delete_bot_cookies(bot_letter):
+                                    print_colored('Sistema', f"Cookies do Bot {bot_letter} deletados com sucesso.", is_success=True)
+                                else:
+                                    print_colored('Sistema', f"Falha ao deletar cookies do Bot {bot_letter}.", is_error=True)
+                            
                             print_colored(bot_letter, line.strip())
                             no_output_counter = 0
                             
@@ -1649,11 +1725,13 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                             restart_thread.daemon = False  # Não daemon para não morrer com o programa principal
                             restart_thread.start()
                         elif restart_counts[bot_letter] >= max_restarts:
-                            print_colored('Sistema', f"Número máximo de reinicializações ({max_restarts}) atingido para Bot {bot_letter}. Não será reiniciado.", is_error=True)
-                            bot_states[bot_letter] = 'failed'  # Marcar como falhou definitivamente
-                            # Enviar notificação para Discord sobre max restarts atingido
-                            last_err = f"Código de saída: {exit_code}"
-                            threading.Thread(target=send_discord_max_restart_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, max_restarts, last_err)).start()
+                            # Só enviar notificação se ainda não foi marcado como 'failed' (evita duplicação)
+                            if bot_states.get(bot_letter) != 'failed':
+                                print_colored('Sistema', f"Número máximo de reinicializações ({max_restarts}) atingido para Bot {bot_letter}. Não será reiniciado.", is_error=True)
+                                bot_states[bot_letter] = 'failed'  # Marcar como falhou definitivamente
+                                # Enviar notificação para Discord sobre max restarts atingido
+                                last_err = f"Código de saída: {exit_code}"
+                                threading.Thread(target=send_discord_max_restart_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, max_restarts, last_err)).start()
                         
                 except Exception as e:
                     print_colored('Sistema', f"Erro ao monitorar Bot {bot_letter}: {str(e)}", is_error=True)
