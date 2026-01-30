@@ -575,12 +575,17 @@ def send_discord_max_restart_alert(bot_letter, discord_webhook_url_br, discord_w
         return False
 
 def delete_bot_cookies(bot_letter):
-    """Deleta os arquivos de cookies de um bot específico baseado no perfil da sessão"""
+    """Deleta os arquivos de cookies de um bot específico baseado no email da conta"""
     try:
         config_file = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_{bot_letter}", "src", "config.json")
+        accounts_file = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_{bot_letter}", "src", "accounts.json")
         
         if not os.path.exists(config_file):
             print(f"❌ Arquivo config.json não encontrado para Bot {bot_letter}")
+            return False
+        
+        if not os.path.exists(accounts_file):
+            print(f"❌ Arquivo accounts.json não encontrado para Bot {bot_letter}")
             return False
         
         config_data = load_json_with_comments(config_file)
@@ -588,30 +593,35 @@ def delete_bot_cookies(bot_letter):
             print(f"❌ Não foi possível carregar config.json do Bot {bot_letter}")
             return False
         
-        session_path = config_data.get('sessionPath', '')
-        
-        # Extrair o nome do perfil da sessão (ex: multi-BR01)
-        session_profile = None
-        if session_path and 'sessions/_' in session_path:
-            session_profile = session_path.split('sessions/_')[1]
-        
-        if not session_profile:
-            print(f"❌ Não foi possível identificar o perfil da sessão para Bot {bot_letter}")
+        # Obter o email da conta
+        accounts_data = load_json_with_comments(accounts_file)
+        if not accounts_data:
+            print(f"❌ Não foi possível carregar accounts.json do Bot {bot_letter}")
             return False
         
-        # Caminho do diretório de cookies compartilhado
-        # Extrair BOT_ACCOUNT do sessionPath (ex: multi-BR01 -> multi-BR)
-        # O padrão é: sessions/_multi-BR01, então precisamos do diretório pai
+        email = extract_email_from_accounts(accounts_data)
+        if email == 'Unknown' or not email:
+            print(f"❌ Não foi possível identificar o email da conta para Bot {bot_letter}")
+            return False
+        
+        # Obter BOT_ACCOUNT do .env ou extrair do sessionPath
         bot_account = bot_acc_env  # Usa a variável global BOT_ACCOUNT do .env
         
         if not bot_account:
-            # Tentar extrair do session_profile (remover números finais)
-            import re
-            match = re.match(r'^(.*?)\d*$', session_profile)
-            if match:
-                bot_account = match.group(1).rstrip('0123456789')
+            session_path = config_data.get('sessionPath', '')
+            if session_path and 'sessions/_' in session_path:
+                session_profile = session_path.split('sessions/_')[1]
+                # Tentar extrair do session_profile (remover números finais)
+                match = re.match(r'^(.*?)\d*$', session_profile)
+                if match:
+                    bot_account = match.group(1).rstrip('0123456789')
         
-        cookies_dir = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_shared", "sessions", f"_{bot_account}", session_profile)
+        if not bot_account:
+            print(f"❌ Não foi possível identificar o BOT_ACCOUNT para Bot {bot_letter}")
+            return False
+        
+        # Caminho do diretório de cookies: _shared/sessions/_{bot_account}/{email}
+        cookies_dir = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_shared", "sessions", f"_{bot_account}", email)
         
         if os.path.exists(cookies_dir):
             # Deletar todos os arquivos de cookies no diretório
@@ -629,7 +639,7 @@ def delete_bot_cookies(bot_letter):
                     print(f"⚠️ Erro ao deletar {file_path}: {e}")
             
             if deleted_files:
-                print(f"🗑️ Cookies deletados para Bot {bot_letter} [{session_profile}]: {', '.join(deleted_files)}")
+                print(f"🗑️ Cookies deletados para Bot {bot_letter} [{email}]: {', '.join(deleted_files)}")
                 return True
             else:
                 print(f"⚠️ Nenhum arquivo de cookie encontrado em {cookies_dir}")
