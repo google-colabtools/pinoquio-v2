@@ -1507,9 +1507,10 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                 bot_states[bot_letter] = 'banned'  # Marcar como banido
                                 threading.Thread(target=send_discord_suspension_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us)).start()
                             
-                            # Verificar erro de cookies inválidos e deletar cookies automaticamente
-                            if "Invalid cookie fields" in line:
-                                print_colored('Sistema', f"Erro de cookies inválidos detectado no Bot {bot_letter}. Deletando cookies...", is_warning=True)
+                            # Verificar erros que requerem deleção de cookies
+                            if "Invalid cookie fields" in line or "net::ERR_TUNNEL_CONNECTION_FAILED" in line:
+                                error_type = "cookies inválidos" if "Invalid cookie fields" in line else "erro de conexão tunnel"
+                                print_colored('Sistema', f"Erro de {error_type} detectado no Bot {bot_letter}. Deletando cookies...", is_warning=True)
                                 if delete_bot_cookies(bot_letter):
                                     print_colored('Sistema', f"Cookies do Bot {bot_letter} deletados com sucesso.", is_success=True)
                                 else:
