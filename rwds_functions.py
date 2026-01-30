@@ -525,6 +525,55 @@ def send_discord_timeout_alert(bot_letter, discord_webhook_url_br, discord_webho
         print(f"❌ Erro ao enviar notificação de timeout para Discord: {str(e)}")
         return False
 
+def send_discord_max_restart_alert(bot_letter, discord_webhook_url_br, discord_webhook_url_us, max_restarts, last_error="Erro não especificado"):
+    """Envia uma mensagem para o webhook do Discord quando um bot atinge o número máximo de restarts"""
+    try:
+        # Obter informações da conta
+        email = "Unknown"
+        session_profile = "Unknown"
+        try:
+            accounts_file = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_{bot_letter}", "src", "accounts.json")
+            config_file = os.path.join(BASEDIR, f"{BOT_BASE_DIR_NAME}_{bot_letter}", "src", "config.json")
+            
+            # Obter email
+            if os.path.exists(accounts_file):
+                accounts_data = load_json_with_comments(accounts_file)
+                if accounts_data:
+                    email = extract_email_from_accounts(accounts_data)
+            
+            # Obter perfil da sessão
+            if os.path.exists(config_file):
+                config_data = load_json_with_comments(config_file)
+                if config_data:
+                    session_path = config_data.get('sessionPath', '')
+                    if session_path and 'sessions/_' in session_path:
+                        session_profile = session_path.split('sessions/_')[1]
+        except Exception as e:
+            print(f"❌ Erro ao obter informações da conta: {str(e)}")
+        
+        # Determinar webhook baseado no perfil
+        is_multi_br = session_profile.startswith('multi-BR')
+        DISCORD_WEBHOOK_URL = discord_webhook_url_br if is_multi_br else discord_webhook_url_us
+        
+        # Formatar mensagem para Discord
+        current_timestamp = time.strftime("%d/%m/%Y %H:%M:%S")
+        flag_emoji = ":flag_br:" if is_multi_br else ":flag_us:"
+        discord_message = f"🔄❌ {flag_emoji} {current_timestamp}: [{session_profile}-{bot_letter}] - {email} - ENCERRADO após {max_restarts} restarts\n📝 Último erro: {last_error}"
+        
+        # Enviar mensagem
+        data = {"content": discord_message}
+        response = post_discord_with_custom_dns(DISCORD_WEBHOOK_URL, data)
+        if response.status_code == 204:
+            print(f"✅ Notificação de max restart enviada para Discord: {email} [{session_profile}-{bot_letter}]")
+            return True
+        else:
+            print(f"❌ Erro ao enviar notificação de max restart: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro ao enviar notificação de max restart para Discord: {str(e)}")
+        return False
+
 def send_discord_suspension_alert(bot_letter, discord_webhook_url_br, discord_webhook_url_us):
     """Envia uma mensagem para o webhook do Discord quando uma conta é suspensa"""
     global banned_bots, last_banned_alerts
@@ -1225,7 +1274,7 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
     
     # Contador de reinicializações para cada bot
     restart_counts = {bot: 0 for bot in bots_to_run}
-    max_restarts = 20  # Número máximo de tentativas de reinicialização
+    max_restarts = 8  # Número máximo de erros críticos antes de parar de reiniciar
     
     # Controle de estado dos bots (novo)
     bot_states = {bot: 'running' for bot in bots_to_run}  # 'running', 'completed', 'failed', 'banned', 'inactive_timeout'
@@ -1445,6 +1494,9 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                     else:
                                         print_colored('Sistema', f"Número máximo de reinicializações ({max_restarts}) atingido para Bot {bot_letter}. Não será reiniciado.", is_error=True)
                                         bot_states[bot_letter] = 'failed'  # Marcar como falhou definitivamente
+                                        # Enviar notificação para Discord sobre max restarts atingido
+                                        last_err = last_critical_error if last_critical_error else "Erro crítico não especificado"
+                                        threading.Thread(target=send_discord_max_restart_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, max_restarts, last_err)).start()
                                 else:
                                     print_colored('Sistema', f"Desligamento solicitado. Bot {bot_letter} não será reiniciado.", is_warning=True)
 
@@ -1599,6 +1651,9 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                         elif restart_counts[bot_letter] >= max_restarts:
                             print_colored('Sistema', f"Número máximo de reinicializações ({max_restarts}) atingido para Bot {bot_letter}. Não será reiniciado.", is_error=True)
                             bot_states[bot_letter] = 'failed'  # Marcar como falhou definitivamente
+                            # Enviar notificação para Discord sobre max restarts atingido
+                            last_err = f"Código de saída: {exit_code}"
+                            threading.Thread(target=send_discord_max_restart_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us, max_restarts, last_err)).start()
                         
                 except Exception as e:
                     print_colored('Sistema', f"Erro ao monitorar Bot {bot_letter}: {str(e)}", is_error=True)
