@@ -199,20 +199,61 @@ export class Login {
       this.bot.log(this.bot.isMobile, 'LOGIN', 'Starting login process')
       this.currentTotpSecret = (totpSecret && totpSecret.trim()) || undefined
 
-      // === DEBUG: Detailed navigation to rewards/dashboard ===
+      // === DEBUG: Test basic connectivity first ===
       const navStartTime = Date.now()
+      this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] Testing browser network connectivity...`)
+      
+      // Test 1: Try a simple navigation to about:blank to verify browser works
+      try {
+        await page.goto('about:blank', { timeout: 5000 })
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] about:blank OK`)
+      } catch (e: any) {
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] about:blank FAILED: ${e.message}`)
+      }
+      
+      // Test 2: Try to fetch DNS/network via a simple site
+      try {
+        const testResponse = await page.goto('https://www.google.com', { timeout: 10000, waitUntil: 'commit' })
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] google.com status: ${testResponse?.status() || 'no response'}`)
+        await page.goto('about:blank', { timeout: 5000 }) // Reset
+      } catch (e: any) {
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] google.com FAILED: ${e.message?.substring(0, 150)}`)
+      }
+      
+      // Test 3: Try bing.com directly (not rewards)
+      try {
+        const bingResponse = await page.goto('https://www.bing.com', { timeout: 15000, waitUntil: 'commit' })
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] bing.com status: ${bingResponse?.status() || 'no response'}, url: ${page.url()}`)
+        await page.goto('about:blank', { timeout: 5000 }) // Reset
+      } catch (e: any) {
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] bing.com FAILED: ${e.message?.substring(0, 150)}`)
+        // If bing.com itself fails, there's a fundamental network/proxy issue
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[CONNECTIVITY-TEST] ⚠️ BING.COM UNREACHABLE - Check proxy/network/DNS`)
+      }
+      
       this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-START] Initiating navigation to rewards/dashboard`)
       this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-START] Current URL before navigation: ${page.url()}`)
       
-      for (let attempt = 1; attempt <= 5; attempt++) {
+      // URLs to alternate between (primary + fallback)
+      const loginUrls = [
+        'https://www.bing.com/rewards/dashboard',
+        'https://rewards.bing.com/Signin'
+      ]
+      
+      let navigationSuccess = false
+      const maxAttempts = 10 // 5 tentativas por URL alternando
+      
+      for (let attempt = 1; attempt <= maxAttempts && !navigationSuccess; attempt++) {
+        // Alterna entre as URLs: tentativa 1,3,5,7,9 = URL[0], tentativa 2,4,6,8,10 = URL[1]
+        const targetUrl = loginUrls[(attempt - 1) % loginUrls.length]
         const attemptStart = Date.now()
-        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/5] Starting navigation attempt...`)
         
-        try {
-          // Log network conditions
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/5] Calling page.goto with 30s timeout...`)
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/${maxAttempts}] Trying: ${targetUrl}`)
           
-          const response = await page.goto('https://www.bing.com/rewards/dashboard', { 
+        try {
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/${maxAttempts}] Calling page.goto with 30s timeout...`)
+            
+          const response = await page.goto(targetUrl, { 
             timeout: 30000,
             waitUntil: 'load'
           })
@@ -227,7 +268,7 @@ export class Login {
             
             // Check for redirects
             const finalUrl = page.url()
-            if (finalUrl !== 'https://www.bing.com/rewards/dashboard') {
+            if (finalUrl !== targetUrl) {
               this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-REDIRECT] Redirected to: ${finalUrl}`)
             }
             
@@ -254,6 +295,8 @@ export class Login {
           
           this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-STATE] hasRewardsPortal=${hasRewardsPortal}, hasLoginForm=${hasLoginForm}, hasErrorPage=${hasErrorPage}`)
           
+          navigationSuccess = true
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-SUCCESS] Successfully navigated to ${targetUrl}`)
           break // Success - exit retry loop
           
         } catch (error: any) {
@@ -261,32 +304,37 @@ export class Login {
           const errorName = error?.name || 'UnknownError'
           const errorMessage = error?.message || String(error)
           
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Error type: ${errorName}`)
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Error message: ${errorMessage.substring(0, 200)}`)
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Duration before fail: ${attemptDuration}ms`)
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Current URL after fail: ${page.url()}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Error type: ${errorName}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Error message: ${errorMessage.substring(0, 200)}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Duration before fail: ${attemptDuration}ms`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Current URL after fail: ${page.url()}`)
           
           // Check page state even on failure
           const pageContent = await page.content().catch(() => '')
           const contentLength = pageContent.length
           const hasPartialContent = contentLength > 1000
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Page content length: ${contentLength}, hasPartialContent=${hasPartialContent}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Page content length: ${contentLength}, hasPartialContent=${hasPartialContent}`)
           
           // Look for specific error indicators in page
           const isBlankPage = contentLength < 500
           const hasTimeout = errorMessage.includes('Timeout')
           const hasNetworkError = errorMessage.includes('net::') || errorMessage.includes('ERR_')
           
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] isBlankPage=${isBlankPage}, hasTimeout=${hasTimeout}, hasNetworkError=${hasNetworkError}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] isBlankPage=${isBlankPage}, hasTimeout=${hasTimeout}, hasNetworkError=${hasNetworkError}`)
           
-          if (attempt === 5) {
-            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FATAL] All 5 attempts failed, total time: ${Date.now() - navStartTime}ms`)
-            throw error
+          if (attempt === maxAttempts) {
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-URL-FAILED] All ${maxAttempts} attempts failed for both URLs`)
+          } else {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Navigation attempt ${attempt}/${maxAttempts} failed (${errorName}), waiting 2s before trying alternate URL...`, 'warn')
+            await this.bot.utils.wait(2000)
           }
-          
-          this.bot.log(this.bot.isMobile, 'LOGIN', `Navigation attempt ${attempt}/5 failed (${errorName}), waiting 2s before retry...`, 'warn')
-          await this.bot.utils.wait(2000)
         }
+      }
+      
+      // If no URL worked, throw error
+      if (!navigationSuccess) {
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FATAL] All URLs failed after all attempts, total time: ${Date.now() - navStartTime}ms`)
+        throw new Error('Failed to navigate to any rewards URL after all retries')
       }
       
       const totalNavTime = Date.now() - navStartTime
