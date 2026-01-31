@@ -307,7 +307,9 @@ export class Login {
           this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Error type: ${errorName}`)
           this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Error message: ${errorMessage.substring(0, 200)}`)
           this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Duration before fail: ${attemptDuration}ms`)
-          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Current URL after fail: ${page.url()}`)
+          
+          const currentUrl = page.url()
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] Current URL after fail: ${currentUrl}`)
           
           // Check page state even on failure
           const pageContent = await page.content().catch(() => '')
@@ -321,6 +323,18 @@ export class Login {
           const hasNetworkError = errorMessage.includes('net::') || errorMessage.includes('ERR_')
           
           this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/${maxAttempts}] isBlankPage=${isBlankPage}, hasTimeout=${hasTimeout}, hasNetworkError=${hasNetworkError}`)
+          
+          // === PARTIAL SUCCESS DETECTION ===
+          // Se foi timeout MAS a página já carregou (>100KB) e está em uma URL válida, considerar sucesso
+          const isValidUrl = currentUrl.includes('rewards.bing.com') || currentUrl.includes('login.live.com') || currentUrl.includes('login.microsoftonline.com')
+          const hasSignificantContent = contentLength > 100000 // >100KB = página carregada
+          
+          if (hasTimeout && isValidUrl && hasSignificantContent) {
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-PARTIAL-SUCCESS] Timeout but page loaded! URL=${currentUrl}, content=${contentLength} bytes`)
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Navigation timeout but page already loaded (${Math.round(contentLength/1024)}KB), continuing...`)
+            navigationSuccess = true
+            break // Consider it a success and continue
+          }
           
           if (attempt === maxAttempts) {
             this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-URL-FAILED] All ${maxAttempts} attempts failed for both URLs`)
