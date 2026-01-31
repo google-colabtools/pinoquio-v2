@@ -245,7 +245,7 @@ export class Login {
       
       for (let attempt = 1; attempt <= maxAttempts && !navigationSuccess; attempt++) {
         // Alterna entre as URLs: tentativa 1,3,5,7,9 = URL[0], tentativa 2,4,6,8,10 = URL[1]
-        const targetUrl = loginUrls[(attempt - 1) % loginUrls.length]
+        const targetUrl = loginUrls[(attempt - 1) % loginUrls.length]!
         const attemptStart = Date.now()
         
         this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/${maxAttempts}] Trying: ${targetUrl}`)
