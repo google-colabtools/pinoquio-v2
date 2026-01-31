@@ -199,16 +199,100 @@ export class Login {
       this.bot.log(this.bot.isMobile, 'LOGIN', 'Starting login process')
       this.currentTotpSecret = (totpSecret && totpSecret.trim()) || undefined
 
-      // Simple retry for initial navigation
+      // === DEBUG: Detailed navigation to rewards/dashboard ===
+      const navStartTime = Date.now()
+      this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-START] Initiating navigation to rewards/dashboard`)
+      this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-START] Current URL before navigation: ${page.url()}`)
+      
       for (let attempt = 1; attempt <= 5; attempt++) {
+        const attemptStart = Date.now()
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/5] Starting navigation attempt...`)
+        
         try {
-          await page.goto('https://www.bing.com/rewards/dashboard', { timeout: 10000 })
-          break
-        } catch (error) {
-          if (attempt === 5) throw error
-          await this.bot.utils.wait(1500)
+          // Log network conditions
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-ATTEMPT ${attempt}/5] Calling page.goto with 30s timeout...`)
+          
+          const response = await page.goto('https://www.bing.com/rewards/dashboard', { 
+            timeout: 30000,
+            waitUntil: 'load'
+          })
+          
+          const attemptDuration = Date.now() - attemptStart
+          
+          // Log response details
+          if (response) {
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-SUCCESS] Response status: ${response.status()} ${response.statusText()}`)
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-SUCCESS] Final URL: ${response.url()}`)
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-SUCCESS] Duration: ${attemptDuration}ms`)
+            
+            // Check for redirects
+            const finalUrl = page.url()
+            if (finalUrl !== 'https://www.bing.com/rewards/dashboard') {
+              this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-REDIRECT] Redirected to: ${finalUrl}`)
+            }
+            
+            // Log response headers for debugging
+            const headers = response.headers()
+            if (headers['content-type']) {
+              this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-HEADERS] Content-Type: ${headers['content-type']}`)
+            }
+            if (headers['x-msedge-ref']) {
+              this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-HEADERS] Edge-Ref: ${headers['x-msedge-ref']}`)
+            }
+          } else {
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-WARNING] No response object returned, duration: ${attemptDuration}ms`)
+          }
+          
+          // Check page state after navigation
+          const pageTitle = await page.title().catch(() => 'FAILED_TO_GET_TITLE')
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-PAGE] Page title: "${pageTitle}"`)
+          
+          // Check if page has critical elements
+          const hasRewardsPortal = await page.$('html[data-role-name="RewardsPortal"]').then(el => !!el).catch(() => false)
+          const hasLoginForm = await page.$('input[type="email"], input[name="loginfmt"]').then(el => !!el).catch(() => false)
+          const hasErrorPage = await page.$('.error-page, #error-page, .errorPageContainer').then(el => !!el).catch(() => false)
+          
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-STATE] hasRewardsPortal=${hasRewardsPortal}, hasLoginForm=${hasLoginForm}, hasErrorPage=${hasErrorPage}`)
+          
+          break // Success - exit retry loop
+          
+        } catch (error: any) {
+          const attemptDuration = Date.now() - attemptStart
+          const errorName = error?.name || 'UnknownError'
+          const errorMessage = error?.message || String(error)
+          
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Error type: ${errorName}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Error message: ${errorMessage.substring(0, 200)}`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Duration before fail: ${attemptDuration}ms`)
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Current URL after fail: ${page.url()}`)
+          
+          // Check page state even on failure
+          const pageContent = await page.content().catch(() => '')
+          const contentLength = pageContent.length
+          const hasPartialContent = contentLength > 1000
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] Page content length: ${contentLength}, hasPartialContent=${hasPartialContent}`)
+          
+          // Look for specific error indicators in page
+          const isBlankPage = contentLength < 500
+          const hasTimeout = errorMessage.includes('Timeout')
+          const hasNetworkError = errorMessage.includes('net::') || errorMessage.includes('ERR_')
+          
+          this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FAIL ${attempt}/5] isBlankPage=${isBlankPage}, hasTimeout=${hasTimeout}, hasNetworkError=${hasNetworkError}`)
+          
+          if (attempt === 5) {
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-FATAL] All 5 attempts failed, total time: ${Date.now() - navStartTime}ms`)
+            throw error
+          }
+          
+          this.bot.log(this.bot.isMobile, 'LOGIN', `Navigation attempt ${attempt}/5 failed (${errorName}), waiting 2s before retry...`, 'warn')
+          await this.bot.utils.wait(2000)
         }
       }
+      
+      const totalNavTime = Date.now() - navStartTime
+      this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `[NAV-COMPLETE] Total navigation time: ${totalNavTime}ms`)
+      // === END DEBUG ===
+      
       await this.disableFido(page)
       await page.waitForLoadState('domcontentloaded').catch(() => { })
       await this.bot.browser.utils.reloadBadPage(page)
@@ -500,14 +584,15 @@ export class Login {
   private async verifyBingContext(page: Page) {
     try {
       this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'Verifying Bing auth context')
-      // Simple retry for initial navigation
+      // Simple retry for Bing auth navigation with 30s timeout
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
-          await page.goto('https://www.bing.com/fd/auth/signin?action=interactive&provider=windows_live_id&return_url=https%3A%2F%2Fwww.bing.com%2F', { timeout: 10000 })
+          await page.goto('https://www.bing.com/fd/auth/signin?action=interactive&provider=windows_live_id&return_url=https%3A%2F%2Fwww.bing.com%2F', { timeout: 30000 })
           break
         } catch (error) {
           if (attempt === 5) throw error
-          await this.bot.utils.wait(1500)
+          this.bot.log(this.bot.isMobile, 'LOGIN-BING', `Auth navigation attempt ${attempt}/5 failed, retrying...`, 'warn')
+          await this.bot.utils.wait(2000)
         }
       }
       for (let i = 0; i < 5; i++) {
