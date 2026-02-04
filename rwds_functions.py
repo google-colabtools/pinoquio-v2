@@ -2169,11 +2169,11 @@ def verificar_tarefa_concluida(nome_tarefa, projeto_id=None):
     try:
         # Se projeto_id foi especificado, filtra por projeto
         if projeto_id:
-            response = requests.get(f"https://api.todoist.com/rest/v2/tasks?project_id={projeto_id}", headers=HEADERS)
+            response = requests.get(f"https://api.todoist.com/api/v1/tasks?project_id={projeto_id}", headers=HEADERS)
         else:
-            response = requests.get("https://api.todoist.com/rest/v2/tasks", headers=HEADERS)
+            response = requests.get("https://api.todoist.com/api/v1/tasks", headers=HEADERS)
             
-        tarefas = response.json()
+        tarefas = response.json().get('results', [])
         for tarefa in tarefas:
             if tarefa["content"].lower() == nome_tarefa.lower():
                 projeto_info = f" no projeto {projeto_id}" if projeto_id else ""
@@ -2194,15 +2194,15 @@ def concluir_tarefa(nome_tarefa, projeto_id=None):
     try:
         # Se projeto_id foi especificado, filtra por projeto
         if projeto_id:
-            response = requests.get(f"https://api.todoist.com/rest/v2/tasks?project_id={projeto_id}", headers=HEADERS)
+            response = requests.get(f"https://api.todoist.com/api/v1/tasks?project_id={projeto_id}", headers=HEADERS)
         else:
-            response = requests.get("https://api.todoist.com/rest/v2/tasks", headers=HEADERS)
+            response = requests.get("https://api.todoist.com/api/v1/tasks", headers=HEADERS)
             
-        tarefas = response.json()
+        tarefas = response.json().get('results', [])
         for tarefa in tarefas:
             if tarefa["content"].lower() == nome_tarefa.lower():
                 tarefa_id = tarefa["id"]
-                r = requests.post(f"https://api.todoist.com/rest/v2/tasks/{tarefa_id}/close", headers=HEADERS)
+                r = requests.post(f"https://api.todoist.com/api/v1/tasks/{tarefa_id}/close", headers=HEADERS)
                 if r.status_code == 204:
                     projeto_info = f" no projeto {projeto_id}" if projeto_id else ""
                     print(f"[✔️ CONCLUÍDA] Tarefa '{nome_tarefa}' concluída com sucesso{projeto_info}.")
@@ -2225,18 +2225,18 @@ def criar_tarefa(nome_tarefa, projeto_id=None):
     try:
         # Se projeto_id foi especificado, filtra por projeto para verificar se já existe
         if projeto_id:
-            response = requests.get(f"https://api.todoist.com/rest/v2/tasks?project_id={projeto_id}", headers=HEADERS)
+            response = requests.get(f"https://api.todoist.com/api/v1/tasks?project_id={projeto_id}", headers=HEADERS)
         else:
-            response = requests.get("https://api.todoist.com/rest/v2/tasks", headers=HEADERS)
+            response = requests.get("https://api.todoist.com/api/v1/tasks", headers=HEADERS)
             
-        tarefas = response.json()
+        tarefas = response.json().get('results', [])
         for tarefa in tarefas:
             if tarefa["content"].lower() == nome_tarefa.lower():
                 projeto_info = f" no projeto {projeto_id}" if projeto_id else ""
                 print(f"[⚠️ JÁ EXISTE] Tarefa '{nome_tarefa}' já existe e está ativa{projeto_info}.")
                 return False
                 
-        url = "https://api.todoist.com/rest/v2/tasks"
+        url = "https://api.todoist.com/api/v1/tasks"
         payload = {"content": nome_tarefa}
         if projeto_id:
             payload["project_id"] = projeto_id
