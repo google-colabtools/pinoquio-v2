@@ -96,6 +96,10 @@ bot_acc_env = str(os.getenv("BOT_ACCOUNT", "")).strip()
 socks_proxy_env = str(os.getenv("SOCKS_PROXY", "False")).strip().lower() == "true"
 discord_webhook_log_env = os.getenv("DISCORD_WEBHOOK_URL_LOG", "").strip()
 
+# HuggingFace Space - para reiniciar automaticamente em caso de problemas de rede
+hf_token_env = "hf_" + os.getenv("HF_TOKEN", "").strip()
+space_repo_id_env = os.getenv("SPACE_REPO_ID", "").strip()
+
 SOCKS_PROXY = socks_proxy_env
 # TODOIST
 todoist_api_env = str(os.getenv("TODOIST_API", "")).strip()
@@ -285,6 +289,10 @@ banned_bots = set()  # Conjunto para evitar duplicatas
 
 last_alerts = {}
 last_banned_alerts = {}  # Novo: controle de duplicação para alertas de contas banidas
+
+# Contador global para detecções de "BING.COM UNREACHABLE" - reinicia o Space após 5 detecções
+bing_unreachable_count = 0
+BING_UNREACHABLE_THRESHOLD = 5  # Número de detecções antes de reiniciar o Space
 
 def clean_account_proxys(account_file):
     try:
@@ -1507,6 +1515,35 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                 bot_states[bot_letter] = 'banned'  # Marcar como banido
                                 threading.Thread(target=send_discord_suspension_alert, args=(bot_letter, discord_webhook_url_br, discord_webhook_url_us)).start()
                             
+                            # Verificar BING.COM UNREACHABLE e reiniciar Space após 5 detecções
+                            if "BING.COM UNREACHABLE" in line.upper():
+                                global bing_unreachable_count
+                                bing_unreachable_count += 1
+                                print_colored('Sistema', f"⚠️ BING.COM UNREACHABLE detectado ({bing_unreachable_count}/{BING_UNREACHABLE_THRESHOLD})", is_warning=True)
+                                
+                                if bing_unreachable_count >= BING_UNREACHABLE_THRESHOLD:
+                                    print_colored('Sistema', f"🔄 Limite de {BING_UNREACHABLE_THRESHOLD} detecções de BING.COM UNREACHABLE atingido. Reiniciando Space...", is_error=True)
+                                    
+                                    # Enviar notificação para Discord antes de reiniciar
+                                    if discord_webhook_log_env:
+                                        threading.Thread(
+                                            target=send_discord_log_message,
+                                            args=(bot_acc_env, f"🔄 Space sendo reiniciado após {BING_UNREACHABLE_THRESHOLD}x BING.COM UNREACHABLE", discord_webhook_log_env)
+                                        ).start()
+                                    
+                                    # Chamar restart_space se as credenciais estiverem configuradas
+                                    if hf_token_env and space_repo_id_env:
+                                        # Executar em thread separada para não bloquear
+                                        def restart_space_thread():
+                                            try:
+                                                restart_space(hf_token_env, space_repo_id_env, factory_reboot=True)
+                                            except Exception as e:
+                                                print_colored('Sistema', f"❌ Erro ao reiniciar Space: {str(e)}", is_error=True)
+                                        
+                                        threading.Thread(target=restart_space_thread, daemon=True).start()
+                                    else:
+                                        print_colored('Sistema', "❌ HF_TOKEN ou SPACE_REPO_ID não configurados. Não foi possível reiniciar o Space.", is_error=True)
+                            
                             # Verificar erros que requerem deleção de cookies
                             if "Invalid cookie fields" in line or "net::ERR_TUNNEL_CONNECTION_FAILED" in line:
                                 error_type = "cookies inválidos" if "Invalid cookie fields" in line else "erro de conexão tunnel"
@@ -1954,7 +1991,7 @@ def kill_all_bots():
     Encerra todos os bots e seus processos filhos de forma mais robusta,
     garantindo que não haja processos persistentes ou logs de execuções anteriores.
     """
-    global bot_pids, processes, restart_counts, is_shutdown_requested, banned_bots, last_banned_alerts
+    global bot_pids, processes, restart_counts, is_shutdown_requested, banned_bots, last_banned_alerts, bing_unreachable_count
     
     # Sinaliza que um desligamento foi solicitado
     is_shutdown_requested = True
@@ -1985,7 +2022,8 @@ def kill_all_bots():
     }  # Resetar os contadores de reinicialização
     banned_bots.clear()  # Limpar a lista de bots banidos
     last_banned_alerts.clear()  # Limpar o histórico de alertas de banimento
-    print("🔄 Lista de contas banidas e histórico de alertas foram limpos. Todos os bots podem ser reiniciados novamente.")
+    bing_unreachable_count = 0  # Resetar contador de BING.COM UNREACHABLE
+    print("🔄 Lista de contas banidas, histórico de alertas e contador de BING.COM UNREACHABLE foram limpos. Todos os bots podem ser reiniciados novamente.")
     
     # Garantir que não haja processos zumbis ou órfãos relacionados aos bots
     # Usar SIGKILL (-9) para garantir encerramento forçado
