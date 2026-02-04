@@ -1527,6 +1527,10 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                     space_restart_triggered = True  # Marcar que restart foi acionado
                                     print_colored('Sistema', f"🔄 Limite de {BING_UNREACHABLE_THRESHOLD} detecções de BING.COM UNREACHABLE atingido. Reiniciando Space...", is_error=True)
                                     
+                                    # Sinalizar shutdown para evitar reinícios de bots
+                                    global is_shutdown_requested
+                                    is_shutdown_requested = True
+                                    
                                     # Enviar notificação para Discord antes de reiniciar (apenas uma vez)
                                     if discord_webhook_log_env:
                                         threading.Thread(
@@ -1534,11 +1538,31 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                             args=(bot_acc_env, f"🔄 Space sendo reiniciado após {BING_UNREACHABLE_THRESHOLD}x BING.COM UNREACHABLE", discord_webhook_log_env)
                                         ).start()
                                     
+                                    # Matar todos os bots antes de reiniciar o Space
+                                    print_colored('Sistema', "🛑 Encerrando todos os bots antes de reiniciar o Space...", is_warning=True)
+                                    
+                                    # Matar processos de forma assíncrona para não bloquear
+                                    def kill_bots_before_restart():
+                                        try:
+                                            # Matar processos de navegadores e bots
+                                            subprocess.run(f"pkill -9 -f '{BOT_BASE_DIR_NAME}_[A-E]' 2>/dev/null", shell=True)
+                                            subprocess.run(f"pkill -9 -f 'node.*{BOT_BASE_DIR_NAME}'", shell=True)
+                                            subprocess.run("pkill -9 -f 'firefox'", shell=True, check=False)
+                                            subprocess.run("pkill -9 -f 'chromium'", shell=True, check=False)
+                                            subprocess.run("pkill -9 -f 'chrome'", shell=True, check=False)
+                                            subprocess.run("pkill -9 -f 'thorium-browser'", shell=True, check=False)
+                                            print_colored('Sistema', "✅ Bots encerrados antes do restart do Space.", is_success=True)
+                                        except Exception as e:
+                                            print_colored('Sistema', f"⚠️ Erro ao encerrar bots: {str(e)}", is_warning=True)
+                                    
+                                    threading.Thread(target=kill_bots_before_restart, daemon=True).start()
+                                    
                                     # Chamar restart_space se as credenciais estiverem configuradas
                                     if hf_token_env and space_repo_id_env:
                                         # Executar em thread separada para não bloquear
                                         def restart_space_thread():
                                             try:
+                                                time.sleep(2)  # Aguardar bots serem encerrados
                                                 restart_space(hf_token_env, space_repo_id_env, factory_reboot=True)
                                             except Exception as e:
                                                 print_colored('Sistema', f"❌ Erro ao reiniciar Space: {str(e)}", is_error=True)
@@ -1570,6 +1594,11 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                             if critical_error_found:
                                 print_colored('Sistema', f"Detectado erro crítico no Bot {bot_letter}: {critical_error_found}", is_error=True)
                                 
+                                # Se o Space está sendo reiniciado, não fazer nada (evitar flood)
+                                if space_restart_triggered:
+                                    print_colored('Sistema', f"Space está reiniciando. Bot {bot_letter} não será reiniciado.", is_warning=True)
+                                    return
+                                
                                 # Verificar se o bot está na lista de banidos
                                 if bot_letter in banned_bots:
                                     print_colored('Sistema', f"Bot {bot_letter} está na lista de contas banidas. Não será reiniciado.", is_error=True)
@@ -1579,16 +1608,23 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                 if not is_shutdown_requested:
                                     if restart_counts[bot_letter] < max_restarts:
                                         time.sleep(10)
+                                        
+                                        # Verificar novamente após o sleep se o Space foi acionado para restart
+                                        if space_restart_triggered:
+                                            print_colored('Sistema', f"Space está reiniciando. Bot {bot_letter} não será reiniciado.", is_warning=True)
+                                            return
+                                        
                                         restart_counts[bot_letter] += 1
                                         print_colored('Sistema', f"Tentativa de reinicialização {restart_counts[bot_letter]}/{max_restarts} para Bot {bot_letter}", is_warning=True)
                                         
-                                        # Enviar mensagem para Discord com detalhes do erro
-                                        DISCORD_WEBHOOK_LOG = discord_webhook_log_env
-                                        BOT_ACC = bot_acc_env
-                                        # Limpar a mensagem de erro antes de enviar
-                                        cleaned_error = clean_error_message(last_critical_error)
-                                        error_message = f"Reiniciando Bot {bot_letter} após erro crítico: {cleaned_error}"
-                                        send_discord_log_message(BOT_ACC, error_message, DISCORD_WEBHOOK_LOG)
+                                        # Enviar mensagem para Discord com detalhes do erro (só se não estiver reiniciando Space)
+                                        if not space_restart_triggered:
+                                            DISCORD_WEBHOOK_LOG = discord_webhook_log_env
+                                            BOT_ACC = bot_acc_env
+                                            # Limpar a mensagem de erro antes de enviar
+                                            cleaned_error = clean_error_message(last_critical_error)
+                                            error_message = f"Reiniciando Bot {bot_letter} após erro crítico: {cleaned_error}"
+                                            send_discord_log_message(BOT_ACC, error_message, DISCORD_WEBHOOK_LOG)
                                         
                                         # Encerrar o processo atual
                                         process.terminate()
@@ -1602,9 +1638,18 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                                             if bot_letter in processes:
                                                 del processes[bot_letter]
                                         
+                                        # Só reiniciar bot se Space não estiver reiniciando
+                                        if space_restart_triggered:
+                                            print_colored('Sistema', f"Space está reiniciando. Bot {bot_letter} não será reiniciado.", is_warning=True)
+                                            return
+                                        
                                         # Iniciar uma nova thread para reiniciar o bot após um breve delay
                                         def restart_bot_wrapper():
                                             time.sleep(10)
+                                            # Verificar mais uma vez antes de reiniciar
+                                            if space_restart_triggered:
+                                                print_colored('Sistema', f"Space está reiniciando. Bot {bot_letter} não será reiniciado.", is_warning=True)
+                                                return
                                             new_process = start_delayed_bot(bot_letter, position, is_restart=True)
                                             if new_process:
                                                 # Adicionar o novo processo ao dicionário global
