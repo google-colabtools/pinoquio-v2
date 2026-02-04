@@ -293,6 +293,7 @@ last_banned_alerts = {}  # Novo: controle de duplicação para alertas de contas
 # Contador global para detecções de "BING.COM UNREACHABLE" - reinicia o Space após 5 detecções
 bing_unreachable_count = 0
 BING_UNREACHABLE_THRESHOLD = 5  # Número de detecções antes de reiniciar o Space
+space_restart_triggered = False  # Flag para evitar múltiplos restarts e flood de mensagens
 
 def clean_account_proxys(account_file):
     try:
@@ -1517,14 +1518,16 @@ def start_bots(discord_webhook_url_br, discord_webhook_url_us, *bots_to_run):
                             
                             # Verificar BING.COM UNREACHABLE e reiniciar Space após 5 detecções
                             if "BING.COM UNREACHABLE" in line.upper():
-                                global bing_unreachable_count
+                                global bing_unreachable_count, space_restart_triggered
                                 bing_unreachable_count += 1
                                 print_colored('Sistema', f"⚠️ BING.COM UNREACHABLE detectado ({bing_unreachable_count}/{BING_UNREACHABLE_THRESHOLD})", is_warning=True)
                                 
-                                if bing_unreachable_count >= BING_UNREACHABLE_THRESHOLD:
+                                # Só executa restart uma única vez
+                                if bing_unreachable_count >= BING_UNREACHABLE_THRESHOLD and not space_restart_triggered:
+                                    space_restart_triggered = True  # Marcar que restart foi acionado
                                     print_colored('Sistema', f"🔄 Limite de {BING_UNREACHABLE_THRESHOLD} detecções de BING.COM UNREACHABLE atingido. Reiniciando Space...", is_error=True)
                                     
-                                    # Enviar notificação para Discord antes de reiniciar
+                                    # Enviar notificação para Discord antes de reiniciar (apenas uma vez)
                                     if discord_webhook_log_env:
                                         threading.Thread(
                                             target=send_discord_log_message,
@@ -1991,7 +1994,7 @@ def kill_all_bots():
     Encerra todos os bots e seus processos filhos de forma mais robusta,
     garantindo que não haja processos persistentes ou logs de execuções anteriores.
     """
-    global bot_pids, processes, restart_counts, is_shutdown_requested, banned_bots, last_banned_alerts, bing_unreachable_count
+    global bot_pids, processes, restart_counts, is_shutdown_requested, banned_bots, last_banned_alerts, bing_unreachable_count, space_restart_triggered
     
     # Sinaliza que um desligamento foi solicitado
     is_shutdown_requested = True
@@ -2023,6 +2026,7 @@ def kill_all_bots():
     banned_bots.clear()  # Limpar a lista de bots banidos
     last_banned_alerts.clear()  # Limpar o histórico de alertas de banimento
     bing_unreachable_count = 0  # Resetar contador de BING.COM UNREACHABLE
+    space_restart_triggered = False  # Resetar flag de restart do Space
     print("🔄 Lista de contas banidas, histórico de alertas e contador de BING.COM UNREACHABLE foram limpos. Todos os bots podem ser reiniciados novamente.")
     
     # Garantir que não haja processos zumbis ou órfãos relacionados aos bots
