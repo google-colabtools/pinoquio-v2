@@ -30,6 +30,7 @@ export default class BrowserUtil {
             { selector: '#bnp_close_link', label: 'Bing Cookie Close' },
             { selector: '#reward_pivot_earn', label: 'Rewards Pivot Earn' },
             { selector: '#streak-protection-popup-close-cross', label: 'Streak Protection Popup Close' },
+            { selector: 'span.dashboardPopUpModalCloseCross[data-bi-id="rx-nav-streak-protection-popup-close-cross"]', label: 'Streak Protection Popup Close Span' },
             { selector: 'a#reward_pivot_earn[role="button"]', label: 'OK Got It Button' },
             { selector: 'a.dashboardPopUpPopUpCloseButton[data-bi-id="rx-nav-popup-close"]', label: 'Dashboard Popup Close Button' },
             { selector: 'a.dashboardPopUpPopUpCloseButton[data-bi-id="rx-nav-popup-close"][ng-click="$ctrl.hidePopUp($event)"]', label: 'Dashboard Popup Maybe Later' },
