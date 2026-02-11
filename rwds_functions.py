@@ -198,23 +198,21 @@ def get_sheets_service():
 def find_row_by_email(service, sheet_name, target_email):
     """
     Encontra o número da linha de um e-mail específico na planilha.
-    Retorna o número da linha (base 1) ou None se não encontrado.
+    Retorna o número da linha (base 1), None se não encontrado,
+    ou levanta exceção em caso de erro de API/rede.
     """
-    try:
-        range_to_read = f'{sheet_name}!{EMAIL_COLUMN}:{EMAIL_COLUMN}'
-        result = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=range_to_read
-        ).execute()
-        values = result.get('values', [])
-        if not values:
-            return None
-        for i, row in enumerate(values):
-            if row and row[0].strip().lower() == target_email.strip().lower():
-                return i + 1
+    range_to_read = f'{sheet_name}!{EMAIL_COLUMN}:{EMAIL_COLUMN}'
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=range_to_read
+    ).execute()
+    values = result.get('values', [])
+    if not values:
         return None
-    except Exception:
-        return None
+    for i, row in enumerate(values):
+        if row and row[0].strip().lower() == target_email.strip().lower():
+            return i + 1
+    return None
 
 def append_email_and_points(service, sheet_name, email, points):
     """
@@ -223,26 +221,40 @@ def append_email_and_points(service, sheet_name, email, points):
     range_to_append = f'{sheet_name}!{EMAIL_COLUMN}:{POINTS_COLUMN}'
     values = [[email, points]]
     body = {'values': values}
-    try:
-        service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=range_to_append,
-            valueInputOption='RAW',
-            insertDataOption='INSERT_ROWS',
-            body=body
-        ).execute()
-    except Exception:
-        pass
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=range_to_append,
+        valueInputOption='RAW',
+        insertDataOption='INSERT_ROWS',
+        body=body
+    ).execute()
 
-def update_points_by_email(email_to_update, new_points, sheet_name):
+def _send_spreadsheet_error_discord(discord_webhook_url, email, points, error_msg):
+    """Envia alerta de erro de atualização de planilha no Discord."""
+    if not discord_webhook_url:
+        return
+    try:
+        current_time = time.strftime("%d/%m/%Y %H:%M")
+        discord_message = (
+            f"⚠️ **ERRO PLANILHA** ({current_time})\n"
+            f"Email: `{email}`\n"
+            f"Pontos: `{points}`\n"
+            f"Erro: `{error_msg}`\n"
+            f"Todas as tentativas falharam. Pontos **NÃO** foram atualizados."
+        )
+        data = {"content": discord_message}
+        post_discord_with_custom_dns(discord_webhook_url, data)
+        print(f"📨 Alerta de erro de planilha enviado no Discord para '{email}'.")
+    except Exception as e:
+        print(f"❌ Falha ao enviar alerta de erro no Discord: {type(e).__name__}: {e}")
+
+def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=3, retry_delay=5, discord_webhook_url=None):
     """
     Atualiza a coluna de pontos para um e-mail específico na planilha.
     Se o e-mail não existir, adiciona na próxima linha em branco.
+    Em caso de erro, retenta até max_retries vezes (nunca faz append quando a busca falhou).
+    Se todas as tentativas falharem e discord_webhook_url for fornecido, envia alerta no Discord.
     """
-    service = get_sheets_service()
-    if not service:
-        return
-
     # Garante que o valor seja numérico
     try:
         numeric_points = int(new_points)
@@ -252,23 +264,85 @@ def update_points_by_email(email_to_update, new_points, sheet_name):
         except (ValueError, TypeError):
             numeric_points = 0  # fallback seguro
 
-    row_number = find_row_by_email(service, sheet_name, email_to_update)
+    last_error = None
 
-    if row_number:
-        range_to_update = f'{sheet_name}!{POINTS_COLUMN}{row_number}'
-        values = [[numeric_points]]
-        body = {'values': values}
+    for attempt in range(1, max_retries + 1):
+        # (Re)autenticar a cada tentativa para evitar problemas de sessão expirada
+        service = get_sheets_service()
+        if not service:
+            last_error = "Falha ao autenticar no Google Sheets"
+            print(f"⚠️ Tentativa {attempt}/{max_retries}: {last_error}.")
+            if attempt < max_retries:
+                print(f"🔄 Tentando novamente em {retry_delay}s...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                print(f"❌ Todas as {max_retries} tentativas de autenticação falharam para '{email_to_update}'.")
+                _send_spreadsheet_error_discord(discord_webhook_url, email_to_update, numeric_points, last_error)
+                return
+
+        # Buscar email na planilha
+        row_number = None
+        search_succeeded = False
         try:
-            service.spreadsheets().values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=range_to_update,
-                valueInputOption='RAW',
-                body=body
-            ).execute()
-        except Exception:
-            pass
-    else:
-        append_email_and_points(service, sheet_name, email_to_update, numeric_points)
+            row_number = find_row_by_email(service, sheet_name, email_to_update)
+            search_succeeded = True
+        except Exception as e:
+            last_error = f"Busca: {type(e).__name__}: {e}"
+            print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao buscar email '{email_to_update}': {type(e).__name__}: {e}")
+            if attempt < max_retries:
+                print(f"🔄 Tentando novamente em {retry_delay}s...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                print(f"❌ Todas as {max_retries} tentativas de busca falharam para '{email_to_update}'. Pontos NÃO atualizados.")
+                _send_spreadsheet_error_discord(discord_webhook_url, email_to_update, numeric_points, last_error)
+                return
+
+        if not search_succeeded:
+            continue
+
+        # Atualizar ou adicionar
+        if row_number:
+            # Email encontrado - atualizar pontos
+            range_to_update = f'{sheet_name}!{POINTS_COLUMN}{row_number}'
+            values = [[numeric_points]]
+            body = {'values': values}
+            try:
+                service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=range_to_update,
+                    valueInputOption='RAW',
+                    body=body
+                ).execute()
+                return  # Sucesso
+            except Exception as e:
+                last_error = f"Atualização: {type(e).__name__}: {e}"
+                print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao atualizar pontos para '{email_to_update}': {type(e).__name__}: {e}")
+                if attempt < max_retries:
+                    print(f"🔄 Tentando novamente em {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f"❌ Todas as {max_retries} tentativas de atualização falharam para '{email_to_update}'.")
+                    _send_spreadsheet_error_discord(discord_webhook_url, email_to_update, numeric_points, last_error)
+                    return
+        else:
+            # Email não encontrado - adicionar novo
+            try:
+                append_email_and_points(service, sheet_name, email_to_update, numeric_points)
+                return  # Sucesso
+            except Exception as e:
+                last_error = f"Adição: {type(e).__name__}: {e}"
+                print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao adicionar '{email_to_update}': {type(e).__name__}: {e}")
+                if attempt < max_retries:
+                    print(f"🔄 Tentando novamente em {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f"❌ Todas as {max_retries} tentativas de adição falharam para '{email_to_update}'.")
+                    _send_spreadsheet_error_discord(discord_webhook_url, email_to_update, numeric_points, last_error)
+                    return
 #==============================================================
 
 # Define o basedir como o diretório atual de execução
@@ -439,7 +513,7 @@ def send_discord_redeem_alert(bot_letter, message, discord_webhook_url_br, disco
             points = ''.join(filter(str.isdigit, points_text))
             points_int = int(points) if points else 0
             print(f"📊 CPC Atualizando Planilha: {points_int} para o email: {email}")
-            update_points_by_email(email, points, SHEET_NAME)
+            update_points_by_email(email, points, SHEET_NAME, discord_webhook_url=DISCORD_WEBHOOK_URL)
             return
 
         elif "Current total:" in message and "Current point count:" not in message:
@@ -449,7 +523,7 @@ def send_discord_redeem_alert(bot_letter, message, discord_webhook_url_br, disco
             points = ''.join(filter(str.isdigit, total_text))
             points_int = int(points) if points else 0
             print(f"📊 CT: Atualizando Planilha: {points_int} para o email: {email}")
-            update_points_by_email(email, points, SHEET_NAME)
+            update_points_by_email(email, points, SHEET_NAME, discord_webhook_url=DISCORD_WEBHOOK_URL)
 
 
         # Verificar condições para envio da mensagem        
