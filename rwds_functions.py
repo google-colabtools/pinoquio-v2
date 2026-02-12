@@ -229,6 +229,50 @@ def append_email_and_points(service, sheet_name, email, points):
         body=body
     ).execute()
 
+def _is_connectivity_error(error):
+    """Verifica se o erro é relacionado a problemas de conectividade/rede."""
+    connectivity_keywords = [
+        'unable to find the server',
+        'name or service not known',
+        'temporary failure in name resolution',
+        'could not resolve host',
+        'network is unreachable',
+        'connection refused',
+        'connection timed out',
+        'connection reset',
+        'no route to host',
+        'dns resolution failed',
+        'getaddrinfo failed',
+        'errno 111',
+        'errno -2',
+        'errno -3',
+        'transporterror',
+    ]
+    error_str = str(error).lower()
+    return any(keyword in error_str for keyword in connectivity_keywords)
+
+def _wait_for_connectivity(email, max_wait=600, check_interval=30):
+    """
+    Aguarda até a conexão com googleapis.com normalizar.
+    Verifica a cada check_interval segundos, por no máximo max_wait segundos.
+    Retorna True se a conexão foi restabelecida, False se atingiu o timeout.
+    """
+    print(f"🌐 Detectada falha de conectividade para '{email}'. Aguardando conexão normalizar...")
+    elapsed = 0
+    while elapsed < max_wait:
+        print(f"⏳ Verificando conexão... ({elapsed}s/{max_wait}s)")
+        try:
+            sock = socket.create_connection(("oauth2.googleapis.com", 443), timeout=10)
+            sock.close()
+            print(f"✅ Conexão com googleapis.com restabelecida após {elapsed}s!")
+            return True
+        except Exception:
+            pass
+        time.sleep(check_interval)
+        elapsed += check_interval
+    print(f"❌ Timeout de {max_wait}s atingido aguardando conectividade para '{email}'.")
+    return False
+
 def _send_spreadsheet_error_discord(discord_webhook_url, email, points, error_msg):
     """Envia alerta de erro de atualização de planilha no Discord."""
     if not discord_webhook_url:
@@ -253,6 +297,7 @@ def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=
     Atualiza a coluna de pontos para um e-mail específico na planilha.
     Se o e-mail não existir, adiciona na próxima linha em branco.
     Em caso de erro, retenta até max_retries vezes (nunca faz append quando a busca falhou).
+    Se detectar erro de conectividade, aguarda a conexão normalizar e recomeça as tentativas.
     Se todas as tentativas falharem e discord_webhook_url for fornecido, envia alerta no Discord.
     """
     # Garante que o valor seja numérico
@@ -265,13 +310,27 @@ def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=
             numeric_points = 0  # fallback seguro
 
     last_error = None
+    connectivity_retries = 0
+    max_connectivity_retries = 3  # Máximo de ciclos de espera de conectividade
 
-    for attempt in range(1, max_retries + 1):
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
+
         # (Re)autenticar a cada tentativa para evitar problemas de sessão expirada
         service = get_sheets_service()
         if not service:
             last_error = "Falha ao autenticar no Google Sheets"
             print(f"⚠️ Tentativa {attempt}/{max_retries}: {last_error}.")
+
+            # Verificar se é erro de conectividade
+            if connectivity_retries < max_connectivity_retries:
+                if _wait_for_connectivity(email_to_update):
+                    connectivity_retries += 1
+                    attempt = 0  # Recomeça as tentativas após conexão voltar
+                    print(f"🔄 Conexão restabelecida. Recomeçando tentativas... (ciclo {connectivity_retries}/{max_connectivity_retries})")
+                    continue
+
             if attempt < max_retries:
                 print(f"🔄 Tentando novamente em {retry_delay}s...")
                 time.sleep(retry_delay)
@@ -290,6 +349,15 @@ def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=
         except Exception as e:
             last_error = f"Busca: {type(e).__name__}: {e}"
             print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao buscar email '{email_to_update}': {type(e).__name__}: {e}")
+
+            # Se for erro de conectividade, aguardar e recomeçar
+            if _is_connectivity_error(e) and connectivity_retries < max_connectivity_retries:
+                if _wait_for_connectivity(email_to_update):
+                    connectivity_retries += 1
+                    attempt = 0  # Recomeça as tentativas após conexão voltar
+                    print(f"🔄 Conexão restabelecida. Recomeçando tentativas... (ciclo {connectivity_retries}/{max_connectivity_retries})")
+                    continue
+
             if attempt < max_retries:
                 print(f"🔄 Tentando novamente em {retry_delay}s...")
                 time.sleep(retry_delay)
@@ -319,6 +387,14 @@ def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=
             except Exception as e:
                 last_error = f"Atualização: {type(e).__name__}: {e}"
                 print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao atualizar pontos para '{email_to_update}': {type(e).__name__}: {e}")
+
+                if _is_connectivity_error(e) and connectivity_retries < max_connectivity_retries:
+                    if _wait_for_connectivity(email_to_update):
+                        connectivity_retries += 1
+                        attempt = 0
+                        print(f"🔄 Conexão restabelecida. Recomeçando tentativas... (ciclo {connectivity_retries}/{max_connectivity_retries})")
+                        continue
+
                 if attempt < max_retries:
                     print(f"🔄 Tentando novamente em {retry_delay}s...")
                     time.sleep(retry_delay)
@@ -335,6 +411,14 @@ def update_points_by_email(email_to_update, new_points, sheet_name, max_retries=
             except Exception as e:
                 last_error = f"Adição: {type(e).__name__}: {e}"
                 print(f"⚠️ Tentativa {attempt}/{max_retries}: Erro ao adicionar '{email_to_update}': {type(e).__name__}: {e}")
+
+                if _is_connectivity_error(e) and connectivity_retries < max_connectivity_retries:
+                    if _wait_for_connectivity(email_to_update):
+                        connectivity_retries += 1
+                        attempt = 0
+                        print(f"🔄 Conexão restabelecida. Recomeçando tentativas... (ciclo {connectivity_retries}/{max_connectivity_retries})")
+                        continue
+
                 if attempt < max_retries:
                     print(f"🔄 Tentando novamente em {retry_delay}s...")
                     time.sleep(retry_delay)
