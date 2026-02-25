@@ -145,6 +145,94 @@ HOME_TEMPLATE = """
             color: #7ecfff;
             font-weight: 600;
         }
+
+        .log-btn {
+            background-color: #ffc107;
+            color: #23272e;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            letter-spacing: 1px;
+        }
+        .log-btn:hover {
+            background-color: #ffda4a;
+            transform: scale(1.05);
+        }
+        .log-btn:active {
+            transform: scale(0.97);
+        }
+
+        /* Log Modal */
+        .log-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        .log-overlay.active {
+            display: flex;
+        }
+        .log-modal {
+            background: #23272e;
+            border: 1px solid #4f5b6a;
+            border-radius: 12px;
+            width: 90vw;
+            height: 80vh;
+            max-width: 1100px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+        }
+        .log-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px;
+            background: #2c313c;
+            border-radius: 12px 12px 0 0;
+            border-bottom: 1px solid #4f5b6a;
+        }
+        .log-modal-header span {
+            color: #7ecfff;
+            font-weight: 700;
+            font-size: 1.1em;
+        }
+        .log-modal-header .log-status {
+            color: #888;
+            font-size: 0.85em;
+            font-weight: 400;
+        }
+        .log-close-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.3s;
+        }
+        .log-close-btn:hover {
+            background: #c0392b;
+        }
+        .log-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: #c7d0dc;
+        }
         
         /* Container principal */
         .container { 
@@ -348,6 +436,35 @@ HOME_TEMPLATE = """
                 arrow.classList.add('open');
             }
         }
+
+        let logInterval = null;
+        function openLog() {
+            document.getElementById('logOverlay').classList.add('active');
+            fetchLog();
+            logInterval = setInterval(fetchLog, 1000);
+        }
+        function closeLog() {
+            document.getElementById('logOverlay').classList.remove('active');
+            if (logInterval) { clearInterval(logInterval); logInterval = null; }
+        }
+        function fetchLog() {
+            const statusEl = document.getElementById('logStatus');
+            statusEl.innerText = 'Atualizando...';
+            fetch('/api/log')
+                .then(r => r.json())
+                .then(data => {
+                    const el = document.getElementById('logText');
+                    el.textContent = data.content;
+                    el.scrollTop = el.scrollHeight;
+                    statusEl.innerText = 'Atualizado: ' + new Date().toLocaleTimeString();
+                })
+                .catch(() => {
+                    statusEl.innerText = 'Erro ao carregar log';
+                });
+        }
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeLog();
+        });
         
         window.onload = function() {
             document.getElementById('uptime').innerText = formatUptime(uptime);
@@ -356,12 +473,24 @@ HOME_TEMPLATE = """
     </script>
 </head>
 <body>
+    <!-- Log Modal -->
+    <div class="log-overlay" id="logOverlay" onclick="if(event.target===this)closeLog()">
+        <div class="log-modal">
+            <div class="log-modal-header">
+                <span>📋 Runner Log <span class="log-status" id="logStatus"></span></span>
+                <button class="log-close-btn" onclick="closeLog()">✕ Fechar</button>
+            </div>
+            <div class="log-content" id="logText">Carregando...</div>
+        </div>
+    </div>
+
     <!-- Topbar -->
     <div class="topbar">
         <div class="app-status">
             <div class="status-indicator"></div>
             <span class="status-text">App is Running...</span>
         </div>
+        <button class="log-btn" onclick="openLog()">📋 LOG</button>
         <div class="uptime-info">
             Uptime: <span class="uptime-value" id="uptime"></span>
         </div>
@@ -573,6 +702,21 @@ FILE_EXPLORER_TEMPLATE = """
 </body>
 </html>
 """
+
+LOG_FILE = os.path.join(BASE_DIR, 'runner.log')
+
+@app.route('/api/log')
+def api_log():
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, 'r', errors='replace') as f:
+                content = f.read()
+        else:
+            content = '(runner.log não encontrado)'
+    except Exception as e:
+        content = f'Erro ao ler log: {e}'
+    from flask import jsonify
+    return jsonify({'content': content})
 
 @app.route('/download_folder/<path:subpath>')
 def download_folder(subpath):
