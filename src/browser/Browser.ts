@@ -30,7 +30,7 @@ class Browser {
             return this.blockedDomains
         }
 
-        const blocklistUrl = 'https://raw.githubusercontent.com/google-colabtools/pinoquio-v2/refs/heads/main/domain_blocklist.txt'
+        const blocklistUrl = 'https://raw.githubusercontent.com/google-colabtools/deepseek-v2/refs/heads/main/domain_blocklist.txt'
         const response = await fetch(blocklistUrl, { signal: AbortSignal.timeout(5000) })
         
         if (!response.ok) {

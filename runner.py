@@ -33,7 +33,7 @@ hf_token_env = "hf_" + str(os.getenv("HF_TOKEN", "")).strip()
 BASEDIR = os.getcwd()
 
 # Define o nome base dos diretórios dos bots (facilita mudanças futuras)
-BOT_BASE_DIR_NAME = "pinoquio-v2"
+BOT_BASE_DIR_NAME = "deepseek-v2"
 
 # Carrega o rwds_functions.py
 def load_functions():
